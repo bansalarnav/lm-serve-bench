@@ -1,0 +1,6 @@
+{"_source":"taubench","timestamp":0,"input_length":700,"hash_ids":[6000,7000]}
+{"_source":"taubench","timestamp":4200,"input_length":1200,"hash_ids":[6000,7001]}
+{"_source":"tau2","timestamp":18000,"input_length":2000,"hash_ids":[6001,7000]}
+{"_source":"tau2","timestamp":24400,"input_length":3500,"hash_ids":[6001,7001]}
+{"_source":"taubench","timestamp":52000,"input_length":5500,"hash_ids":[6002,7000]}
+{"_source":"tau2","timestamp":61000,"input_length":1200,"hash_ids":[6002,7001]}

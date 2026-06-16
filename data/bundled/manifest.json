@@ -1,0 +1,139 @@
+{
+  "version": 1,
+  "description": "Bundled source contract for the default lm-serve-bench benchmark data.",
+  "sources": [
+    {
+      "id": "burstgpt",
+      "kind": "trace",
+      "workload": "prod-chat",
+      "file": "data/bundled/traces/prod-chat.jsonl",
+      "notes": "Bursty production-chat arrival shape."
+    },
+    {
+      "id": "azure",
+      "kind": "trace",
+      "workload": "prod-chat",
+      "file": "data/bundled/traces/prod-chat.jsonl",
+      "notes": "Production context-length shape."
+    },
+    {
+      "id": "qwen-bailian",
+      "kind": "trace",
+      "workload": "prod-cache",
+      "file": "data/bundled/traces/prod-cache.jsonl",
+      "notes": "Prefix-cache trace with repeated block hashes."
+    },
+    {
+      "id": "ragpulse",
+      "kind": "trace",
+      "workload": "rag-cache",
+      "file": "data/bundled/traces/rag-cache.jsonl",
+      "notes": "RAG component/session arrival shape."
+    },
+    {
+      "id": "ragpulse",
+      "kind": "prompt",
+      "workload": "rag-cache",
+      "file": "data/bundled/prompts/rag-cache.jsonl",
+      "notes": "RAG system, retrieved context, history, and question records."
+    },
+    {
+      "id": "qwen-bailian-coder",
+      "kind": "trace",
+      "workload": "code-repo",
+      "file": "data/bundled/traces/code-repo.jsonl",
+      "notes": "Code workload arrival shape."
+    },
+    {
+      "id": "azure",
+      "kind": "trace",
+      "workload": "code-repo",
+      "file": "data/bundled/traces/code-repo.jsonl",
+      "notes": "Fallback code-like arrival and context length shape."
+    },
+    {
+      "id": "swebench",
+      "kind": "prompt",
+      "workload": "code-repo",
+      "file": "data/bundled/prompts/code-repo.jsonl",
+      "notes": "Repository issue-solving prompt records."
+    },
+    {
+      "id": "bigcodebench",
+      "kind": "prompt",
+      "workload": "code-repo",
+      "file": "data/bundled/prompts/code-repo.jsonl",
+      "notes": "Function-level code-generation prompt records."
+    },
+    {
+      "id": "blazedit",
+      "kind": "prompt",
+      "workload": "code-repo",
+      "file": "data/bundled/prompts/code-repo.jsonl",
+      "notes": "Code-edit prompt records."
+    },
+    {
+      "id": "synthetic-long-context",
+      "kind": "trace",
+      "workload": "long-context",
+      "file": "data/bundled/traces/long-context.jsonl",
+      "notes": "Long-context arrivals at 32k tokens and above."
+    },
+    {
+      "id": "longbench",
+      "kind": "prompt",
+      "workload": "long-context",
+      "file": "data/bundled/prompts/long-context.jsonl",
+      "notes": "Long-context document and code-repository records."
+    },
+    {
+      "id": "infinitebench",
+      "kind": "prompt",
+      "workload": "long-context",
+      "file": "data/bundled/prompts/long-context.jsonl",
+      "notes": "Very-long-context transcript-style record."
+    },
+    {
+      "id": "ruler",
+      "kind": "prompt",
+      "workload": "long-context",
+      "file": "data/bundled/prompts/long-context.jsonl",
+      "notes": "Needle-style synthetic long-context record."
+    },
+    {
+      "id": "taubench",
+      "kind": "trace",
+      "workload": "agentic-tools",
+      "file": "data/bundled/traces/agentic-tools.jsonl",
+      "notes": "Agent session gaps and repeated session hashes."
+    },
+    {
+      "id": "tau2",
+      "kind": "trace",
+      "workload": "agentic-tools",
+      "file": "data/bundled/traces/agentic-tools.jsonl",
+      "notes": "Agent session gaps and repeated session hashes."
+    },
+    {
+      "id": "taubench",
+      "kind": "prompt",
+      "workload": "agentic-tools",
+      "file": "data/bundled/prompts/agentic-tools.jsonl",
+      "notes": "Tool-agent task, tool, and state records."
+    },
+    {
+      "id": "tau2",
+      "kind": "prompt",
+      "workload": "agentic-tools",
+      "file": "data/bundled/prompts/agentic-tools.jsonl",
+      "notes": "Tool-agent task, tool, and state records."
+    },
+    {
+      "id": "cache-control",
+      "kind": "generated",
+      "workload": "cache-control",
+      "file": "",
+      "notes": "Deterministic generated high-cache and low-cache calibration workload."
+    }
+  ]
+}

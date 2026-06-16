@@ -1,0 +1,52 @@
+{
+  "name": "smoke",
+  "description": "Tiny AIPerf smoke suite for validating endpoint and harness wiring.",
+  "duration_minutes": 1,
+  "harness": {
+    "primary": "aiperf",
+    "reason": "Uses the same fixed-schedule mooncake_trace path as the default suite, with only a few requests."
+  },
+  "workloads": [
+    {
+      "id": "smoke-cache-control",
+      "name": "Smoke cache control",
+      "category": "synthetic-control",
+      "description": "Tiny mixed shared-prefix and unique-prefix workload for AIPerf smoke testing.",
+      "traffic_sources": [
+        {
+          "name": "Synthetic phased arrivals",
+          "url": "",
+          "notes": "Short deterministic request schedule."
+        }
+      ],
+      "prompt_sources": [
+        {
+          "name": "Synthetic prefix generator",
+          "url": "",
+          "notes": "Generates repeatable hash ids for AIPerf prefix synthesis."
+        }
+      ],
+      "pairing": "controlled_prefix_reuse",
+      "metrics_focus": ["ttft", "tpot", "request-throughput"],
+      "max_output_tokens": 8,
+      "default_requests": 4,
+      "phase": {
+        "type": "fixed_schedule",
+        "duration_seconds": 4,
+        "warmup_requests": 0
+      }
+    }
+  ],
+  "sweeps": [
+    {
+      "id": "load",
+      "description": "Short load replay smoke sweep.",
+      "multipliers": [1, 2]
+    },
+    {
+      "id": "throughput",
+      "description": "Short concurrency smoke sweep.",
+      "concurrency": [1, 2]
+    }
+  ]
+}
