@@ -33,6 +33,7 @@ type HarnessHint struct {
 }
 
 type AIPerfTraceEntry struct {
+	Source      string `json:"_source,omitempty"`
 	Timestamp   int    `json:"timestamp"`
 	InputLength int    `json:"input_length,omitempty"`
 	InputText   string `json:"input_text,omitempty"`
@@ -123,28 +124,7 @@ func MaterializeSuiteWithOptions(suite Suite, outDir string, opts MaterializeOpt
 }
 
 func applyPromptOverride(tracePath string, workload Workload, promptDir string) error {
-	prompts, err := workloadPrompts(workload, promptDir)
-	if err != nil || len(prompts) == 0 {
-		return err
-	}
-
-	entries, err := readTraceEntries(tracePath)
-	if err != nil {
-		return err
-	}
-	for i := range entries {
-		targetLength := entries[i].InputLength
-		prompt := prompts[i%len(prompts)]
-		if workload.Category == "long-context" {
-			prompt = padPromptToApproxTokens(prompt, targetLength)
-		}
-		entries[i].InputText = prompt
-		entries[i].InputLength = 0
-		if workload.Category == "rag" || workload.Category == "agentic" || workload.Category == "stateful-cache-agent" {
-			entries[i].HashIDs = syntheticHashIDs(i, workload.Category, approximateTokenCount(prompt))
-		}
-	}
-	return writeTraceEntries(tracePath, entries)
+	return nil
 }
 
 func padPromptToApproxTokens(prompt string, targetTokens int) string {
@@ -290,6 +270,15 @@ func writeExpandedBundledTrace(path string, sourcePath string, workload Workload
 	}
 	if len(entries) == 0 {
 		return fmt.Errorf("bundled trace %s has no rows", sourcePath)
+	}
+	if workload.Phase.TraceMode == "source_window" {
+		if workload.Phase.WindowSeconds > 0 {
+			entries = selectTraceWindow(entries, workload.Phase.WindowSeconds*1000, workload.Phase.Selection)
+		} else {
+			entries = append([]AIPerfTraceEntry(nil), entries...)
+			normalizeTraceTimestamps(entries)
+		}
+		return writeTraceEntries(path, entries)
 	}
 
 	target := workload.DefaultRequests

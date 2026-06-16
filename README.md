@@ -12,10 +12,10 @@ The first implementation targets AIPerf because it already supports fixed-schedu
 
 ## Current default suite
 
-- `prod-chat`: BurstGPT/Azure-style production arrivals paired with ShareGPT/WildChat-style prompts
-- `prod-cache`: Qwen Bailian-style cache block replay
+- `prod-chat`: Azure production conversation trace window, with ShareGPT/WildChat prompt pools for throughput sweeps
+- `prod-cache`: Qwen Bailian cache block replay with real `hash_ids`
 - `rag-cache`: RAGPulse-style repeated retrieved-context sessions
-- `code-repo`: code editing, repo issue solving, and function generation from Blazedit, SWE-bench, and BigCodeBench-style records
+- `code-repo`: Azure production code trace window, with Blazedit, SWE-bench, and BigCodeBench prompt pools
 - `long-context`: LongBench, InfiniteBench, and RULER-style long prompts for 32k+ contexts
 - `agentic-tools`: tau-bench/tau2-bench-style tool-heavy sessions with client-side gaps
 - `cache-control`: synthetic high-cache and low-cache calibration controls
@@ -46,10 +46,10 @@ Replay and load sweeps use AIPerf fixed-schedule `mooncake_trace` files. Through
 
 The normal benchmark path uses the bundled workload data generated from the suite definitions. Users should not provide their own traces or prompt pools for comparable benchmark results.
 Use `validate-data` to verify that every bundled corpus file renders before packaging or publishing an image.
-Bundled trace seeds are expanded deterministically to each workload's request count, so compact source-shaped files still materialize into the full benchmark workload.
+The standard production trace files are high-variance 25-minute source windows where public exact traces are bundled. Other workload families use deterministic source-shaped traces until their full upstream trace windows are imported.
 The bundled source contract lives in `data/bundled/manifest.json`.
 
-`convert` is a maintainer/import utility for refreshing bundled data from upstream public sources. Supported trace sources are `bailian`, `burstgpt`, and `azure`. Supported prompt/task sources are `sharegpt`, `wildchat`, `blazedit`, `swebench`, `bigcodebench`, `longbench`, `infinitebench`, `ruler`, `taubench`, `tau2`, and `ragpulse`.
+`convert` is a maintainer/import utility for refreshing bundled data from upstream public sources. Supported trace sources are `bailian`, `burstgpt`, and `azure`; use `-window 25m -select high-variance` to emit a source-faithful benchmark window. Supported prompt/task sources are `sharegpt`, `wildchat`, `blazedit`, `swebench`, `bigcodebench`, `longbench`, `infinitebench`, `ruler`, `taubench`, `tau2`, and `ragpulse`.
 
 `self-test` starts an in-process mock OpenAI-compatible endpoint, runs the tiny smoke suite through AIPerf, and writes a normal summary. It is the quickest way to verify the whole local harness path.
 It needs permission to bind a localhost port for the mock endpoint.

@@ -95,7 +95,7 @@ func ValidateBundledData(suite Suite) CorpusReport {
 			item.Error = "bundled trace has no rows"
 		}
 		if requiresBundledTrace(workload) && info.TraceFile == "" {
-			item.Error = "missing bundled trace seed"
+			item.Error = "missing bundled trace"
 		}
 		if info.PromptFile != "" {
 			prompts, err := readPromptTexts(info.PromptFile, workload.Category)
@@ -187,6 +187,9 @@ func corpusInfo(workload Workload) CorpusInfo {
 		info.TraceFile = tracePath
 		info.TraceRecords = len(traceRecords)
 		info.TraceSources = sourceMix(traceRecords, traceDefaultSource(workload.ID))
+		if workload.Phase.TraceMode == "source_window" {
+			info.Requests = len(traceRecords)
+		}
 	}
 
 	promptPath := filepath.Join(bundledPromptDir, workload.ID+".jsonl")
@@ -312,7 +315,7 @@ func FormatCorpusReport(report CorpusReport) string {
 		}
 		if workload.TraceFile != "" {
 			fmt.Fprintf(&b, "  trace file: %s\n", workload.TraceFile)
-			fmt.Fprintf(&b, "  trace seed records: %d, materialized requests: %d\n", workload.TraceRecords, workload.Requests)
+			fmt.Fprintf(&b, "  trace records: %d, materialized requests: %d\n", workload.TraceRecords, workload.Requests)
 		}
 		if len(workload.TraceSources) > 0 {
 			fmt.Fprintf(&b, "  trace sources: %s\n", formatSourceMix(workload.TraceSources))

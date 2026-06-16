@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -14,10 +15,12 @@ import (
 )
 
 type ConvertOptions struct {
-	Source string
-	Input  string
-	Output string
-	Limit  int
+	Source        string
+	Input         string
+	Output        string
+	Limit         int
+	WindowSeconds int
+	Selection     string
 }
 
 func ConvertTrace(opts ConvertOptions) error {
@@ -35,16 +38,82 @@ func ConvertTrace(opts ConvertOptions) error {
 
 	switch strings.ToLower(opts.Source) {
 	case "bailian", "qwen":
-		return convertBailian(in, out, opts.Limit)
+		return convertTraceWindow(in, out, opts, convertBailian)
 	case "burstgpt":
-		return convertBurstGPT(in, out, opts.Limit)
+		return convertTraceWindow(in, out, opts, convertBurstGPT)
 	case "azure":
-		return convertAzure(in, out, opts.Limit)
+		return convertTraceWindow(in, out, opts, convertAzure)
 	case "sharegpt", "wildchat", "blazedit", "swebench", "swe-bench", "bigcodebench", "longbench", "infinitebench", "ruler", "taubench", "tau-bench", "tau2", "tau2-bench", "ragpulse":
 		return convertPromptDataset(in, out, strings.ToLower(opts.Source), opts.Limit)
 	default:
 		return fmt.Errorf("unknown source %q; expected bailian, burstgpt, azure, sharegpt, wildchat, blazedit, swebench, bigcodebench, longbench, infinitebench, ruler, taubench, tau2, or ragpulse", opts.Source)
 	}
+}
+
+func convertTraceWindow(in io.Reader, out io.Writer, opts ConvertOptions, convert func(io.Reader, io.Writer, int) error) error {
+	var buffer bytes.Buffer
+	limit := opts.Limit
+	if opts.WindowSeconds > 0 || opts.Selection != "" {
+		limit = 0
+	}
+	if err := convert(in, &buffer, limit); err != nil {
+		return err
+	}
+
+	entries, err := readTraceEntriesFromReader(&buffer)
+	if err != nil {
+		return err
+	}
+	if opts.WindowSeconds > 0 {
+		entries = selectTraceWindow(entries, opts.WindowSeconds*1000, opts.Selection)
+	}
+	if opts.Limit > 0 && len(entries) > opts.Limit {
+		entries = entries[:opts.Limit]
+	}
+	normalizeTraceTimestamps(entries)
+	sourceID := convertedTraceSourceID(opts.Source)
+	for i := range entries {
+		entries[i].Source = sourceID
+	}
+
+	writer := bufio.NewWriter(out)
+	defer writer.Flush()
+	for _, entry := range entries {
+		if err := writeJSONLine(writer, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convertedTraceSourceID(source string) string {
+	switch strings.ToLower(source) {
+	case "bailian", "qwen":
+		return "qwen-bailian"
+	default:
+		return strings.ToLower(source)
+	}
+}
+
+func readTraceEntriesFromReader(in io.Reader) ([]AIPerfTraceEntry, error) {
+	scanner := bufio.NewScanner(in)
+	scanner.Buffer(make([]byte, 1024), 16*1024*1024)
+
+	var entries []AIPerfTraceEntry
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var entry AIPerfTraceEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			return nil, fmt.Errorf("line %d: %w", lineNo, err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries, scanner.Err()
 }
 
 func convertPromptDataset(in io.Reader, out io.Writer, source string, limit int) error {
@@ -525,6 +594,113 @@ func writeJSONLine(w *bufio.Writer, entry AIPerfTraceEntry) error {
 	return err
 }
 
+func selectTraceWindow(entries []AIPerfTraceEntry, windowMillis int, selection string) []AIPerfTraceEntry {
+	if len(entries) == 0 || windowMillis <= 0 {
+		return entries
+	}
+	selection = strings.TrimSpace(strings.ToLower(selection))
+	if selection == "" {
+		selection = "first"
+	}
+
+	bestStart := 0
+	bestEnd := 0
+	bestScore := math.Inf(-1)
+
+	end := 0
+	var lengthSum, lengthSquares float64
+	var gapSum, gapSquares float64
+	gapCount := 0
+	for start := range entries {
+		for end < len(entries) && entries[end].Timestamp <= entries[start].Timestamp+windowMillis {
+			length := float64(entries[end].InputLength)
+			lengthSum += length
+			lengthSquares += length * length
+			if end > start {
+				gap := float64(entries[end].Timestamp - entries[end-1].Timestamp)
+				if gap < 0 {
+					gap = 0
+				}
+				gapSum += gap
+				gapSquares += gap * gap
+				gapCount++
+			}
+			end++
+		}
+
+		count := end - start
+		if count <= 0 {
+			continue
+		}
+		score := float64(count)
+		if selection == "high-variance" || selection == "variance" {
+			score = traceWindowScore(count, lengthSum, lengthSquares, gapCount, gapSum, gapSquares)
+		}
+		if score > bestScore {
+			bestScore = score
+			bestStart = start
+			bestEnd = end
+		}
+		if selection == "first" {
+			break
+		}
+
+		length := float64(entries[start].InputLength)
+		lengthSum -= length
+		lengthSquares -= length * length
+		if start+1 < end {
+			gap := float64(entries[start+1].Timestamp - entries[start].Timestamp)
+			if gap < 0 {
+				gap = 0
+			}
+			gapSum -= gap
+			gapSquares -= gap * gap
+			gapCount--
+		}
+	}
+
+	selected := append([]AIPerfTraceEntry(nil), entries[bestStart:bestEnd]...)
+	normalizeTraceTimestamps(selected)
+	return selected
+}
+
+func traceWindowScore(count int, lengthSum, lengthSquares float64, gapCount int, gapSum, gapSquares float64) float64 {
+	if count == 0 {
+		return math.Inf(-1)
+	}
+
+	mean := lengthSum / float64(count)
+	variance := lengthSquares/float64(count) - mean*mean
+	if variance < 0 {
+		variance = 0
+	}
+
+	burstScore := 0.0
+	if gapCount > 0 {
+		gapMean := gapSum / float64(gapCount)
+		gapVariance := gapSquares/float64(gapCount) - gapMean*gapMean
+		if gapVariance < 0 {
+			gapVariance = 0
+		}
+		burstScore = math.Sqrt(gapVariance) / math.Max(gapMean, 1)
+	}
+
+	return float64(count)*10 + math.Log1p(variance) + burstScore*25
+}
+
+func normalizeTraceTimestamps(entries []AIPerfTraceEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	first := entries[0].Timestamp
+	for i := range entries {
+		entries[i].Timestamp -= first
+		if entries[i].Timestamp < 0 {
+			entries[i].Timestamp = 0
+		}
+	}
+}
+
 func csvColumns(header []string) map[string]int {
 	columns := make(map[string]int, len(header))
 	for index, name := range header {
@@ -574,6 +750,7 @@ func parseTimestampString(value string) (int64, error) {
 	formats := []string{
 		time.RFC3339Nano,
 		time.RFC3339,
+		"2006-01-02 15:04:05.999999-07:00",
 		"2006-01-02 15:04:05.999999",
 		"2006-01-02 15:04:05",
 		"2006/01/02 15:04:05",

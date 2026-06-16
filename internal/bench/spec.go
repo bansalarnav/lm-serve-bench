@@ -51,6 +51,9 @@ type Phase struct {
 	Type            string `json:"type"`
 	DurationSeconds int    `json:"duration_seconds"`
 	WarmupRequests  int    `json:"warmup_requests"`
+	TraceMode       string `json:"trace_mode,omitempty"`
+	WindowSeconds   int    `json:"window_seconds,omitempty"`
+	Selection       string `json:"selection,omitempty"`
 }
 
 func LoadSuite(path string) (Suite, error) {

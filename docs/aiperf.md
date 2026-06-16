@@ -15,7 +15,7 @@ The project generates one AIPerf-ready directory per workload:
 
 The trace format intentionally avoids per-request target output lengths. Output length is capped at the workload level with AIPerf's `--osl` option so runs finish predictably without pretending that different models should produce exactly the same number of tokens.
 
-`workload.json` also includes bundled corpus metadata: whether the workload uses trace records, prompt records, or deterministic generated data; seed record counts; materialized request count; file paths; and source mix.
+`workload.json` also includes bundled corpus metadata: whether the workload uses trace records, prompt records, or deterministic generated data; trace record counts; materialized request count; file paths; and source mix.
 
 Replay runs and load sweeps use `mooncake_trace` fixed schedules. Throughput sweeps use `random_pool` data because AIPerf requires fixed-schedule traces to run with sequential sampling.
 
@@ -110,7 +110,7 @@ go run ./cmd/lm-serve-bench run \
 ## Bundled data and source imports
 
 The normal benchmark path uses bundled deterministic workload data generated from the suite. Users should not provide their own traces or prompt pools for comparable benchmark results.
-Bundled trace files are compact seeds. Materialization expands them deterministically to the workload request count before AIPerf runs.
+Source-window traces are replayed exactly as bundled. Fixture traces are expanded deterministically to the workload request count before AIPerf runs.
 
 Validate the bundled corpus with:
 
@@ -125,7 +125,8 @@ go run ./cmd/lm-serve-bench convert \
   -source bailian \
   -input qwen_traceA_blksz_16.jsonl \
   -output out/qwen_traceA.jsonl \
-  -limit 10000
+  -window 25m \
+  -select high-variance
 
 go run ./cmd/lm-serve-bench convert \
   -source burstgpt \
@@ -137,10 +138,11 @@ go run ./cmd/lm-serve-bench convert \
   -source azure \
   -input AzureLLMInferenceTrace.csv \
   -output out/azure.jsonl \
-  -limit 10000
+  -window 25m \
+  -select high-variance
 ```
 
-Converters preserve timing and input length. Bailian conversion also preserves `hash_ids`. Per-request source output lengths are intentionally not emitted as AIPerf `output_length`.
+Converters preserve timing and input length. `-window` emits a contiguous wall-clock slice, and `-select high-variance` chooses the slice with dense traffic, varied input lengths, and bursty gaps. Bailian conversion also preserves `hash_ids`. Per-request source output lengths are intentionally not emitted as AIPerf `output_length`.
 
 Prompt/task datasets can also be rendered into AIPerf JSONL:
 

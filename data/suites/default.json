@@ -1,7 +1,7 @@
 {
   "name": "default",
-  "description": "Default single-model LLM serving benchmark suite. Seven workloads cover production chat, production prefix caching, RAG sessions, code/repo tasks, long-context pressure, agentic tool sessions, and synthetic cache controls.",
-  "duration_minutes": 30,
+  "description": "Standard single-model LLM serving benchmark suite. Seven workloads cover production chat, production prefix caching, RAG sessions, code/repo tasks, long-context pressure, agentic tool sessions, and synthetic cache controls.",
+  "duration_minutes": 25,
   "harness": {
     "primary": "aiperf",
     "reason": "AIPerf supports fixed-schedule replay, request-rate and concurrency modes, YAML configs, custom datasets, production trace formats, prefix synthesis, raw payload replay, and headless reports."
@@ -14,14 +14,9 @@
       "description": "Bursty production-like chat traffic with varied input lengths and realistic user prompts.",
       "traffic_sources": [
         {
-          "name": "BurstGPT",
-          "url": "https://github.com/HPMLL/BurstGPT",
-          "notes": "Public LLM serving trace with timestamps, session ids, model names, request tokens, response tokens, and elapsed time."
-        },
-        {
           "name": "Azure LLM Inference Trace 2024",
           "url": "https://raw.githubusercontent.com/Azure/AzurePublicDataset/master/AzureLLMInferenceDataset2024.md",
-          "notes": "Azure production trace with timestamp, context tokens, and generated tokens. Used for arrival and length distributions."
+          "notes": "High-variance 25-minute conversation trace window with timestamps and context-token lengths."
         }
       ],
       "prompt_sources": [
@@ -39,11 +34,14 @@
       "pairing": "trace_arrivals_plus_length_bucketed_chat_prompts",
       "metrics_focus": ["autoscaling", "queueing", "ttft", "tpot", "goodput"],
       "max_output_tokens": 256,
-      "default_requests": 120,
+      "default_requests": 116366,
       "phase": {
         "type": "fixed_schedule",
-        "duration_seconds": 240,
-        "warmup_requests": 20
+        "duration_seconds": 1500,
+        "warmup_requests": 500,
+        "trace_mode": "source_window",
+        "window_seconds": 1500,
+        "selection": "high-variance"
       }
     },
     {
@@ -68,11 +66,14 @@
       "pairing": "preserve_prefix_block_hashes",
       "metrics_focus": ["prefix-cache-hit-rate", "cache-eviction", "ttft", "memory-pressure"],
       "max_output_tokens": 192,
-      "default_requests": 100,
+      "default_requests": 11219,
       "phase": {
         "type": "fixed_schedule",
-        "duration_seconds": 240,
-        "warmup_requests": 16
+        "duration_seconds": 1500,
+        "warmup_requests": 250,
+        "trace_mode": "source_window",
+        "window_seconds": 1500,
+        "selection": "high-variance"
       }
     },
     {
@@ -97,11 +98,11 @@
       "pairing": "preserve_component_hashes",
       "metrics_focus": ["prefix-cache-hit-rate", "kv-retention", "ttft", "rag-context-prefill"],
       "max_output_tokens": 192,
-      "default_requests": 80,
+      "default_requests": 8000,
       "phase": {
         "type": "fixed_schedule",
-        "duration_seconds": 220,
-        "warmup_requests": 12
+        "duration_seconds": 1500,
+        "warmup_requests": 250
       }
     },
     {
@@ -111,14 +112,9 @@
       "description": "Code-heavy prompts ranging from edit contexts to issue-solving and function-level generation.",
       "traffic_sources": [
         {
-          "name": "Qwen Bailian coder trace",
-          "url": "https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon",
-          "notes": "Production coder trace used for arrivals and length shape when available."
-        },
-        {
           "name": "Azure LLM Inference Trace 2024",
           "url": "https://raw.githubusercontent.com/Azure/AzurePublicDataset/master/AzureLLMInferenceDataset2024.md",
-          "notes": "Fallback arrival and context length trace for code-like workloads."
+          "notes": "High-variance 25-minute code trace window with timestamps and context-token lengths."
         }
       ],
       "prompt_sources": [
@@ -141,11 +137,14 @@
       "pairing": "code_prompt_sampling_with_trace_arrivals",
       "metrics_focus": ["long-prefill", "decode-throughput", "code-workload-latency"],
       "max_output_tokens": 512,
-      "default_requests": 80,
+      "default_requests": 131765,
       "phase": {
         "type": "fixed_schedule",
-        "duration_seconds": 260,
-        "warmup_requests": 10
+        "duration_seconds": 1500,
+        "warmup_requests": 500,
+        "trace_mode": "source_window",
+        "window_seconds": 1500,
+        "selection": "high-variance"
       }
     },
     {
@@ -180,11 +179,11 @@
       "pairing": "native_long_prompt_bucket_sampling",
       "metrics_focus": ["prefill-throughput", "kv-memory-pressure", "effective-batch-size", "ttft"],
       "max_output_tokens": 128,
-      "default_requests": 24,
+      "default_requests": 120,
       "phase": {
         "type": "fixed_schedule",
-        "duration_seconds": 240,
-        "warmup_requests": 4
+        "duration_seconds": 1500,
+        "warmup_requests": 8
       }
     },
     {
@@ -219,11 +218,11 @@
       "pairing": "session_replay_with_client_delays",
       "metrics_focus": ["kv-retention", "cache-eviction", "session-latency", "autoscaling-under-idle-gaps"],
       "max_output_tokens": 256,
-      "default_requests": 72,
+      "default_requests": 8000,
       "phase": {
         "type": "fixed_schedule",
-        "duration_seconds": 260,
-        "warmup_requests": 8
+        "duration_seconds": 1500,
+        "warmup_requests": 250
       }
     },
     {
@@ -248,11 +247,11 @@
       "pairing": "controlled_prefix_reuse",
       "metrics_focus": ["cache-hit-rate", "cache-admission", "cache-eviction", "best-case-vs-worst-case-ttft"],
       "max_output_tokens": 128,
-      "default_requests": 96,
+      "default_requests": 10000,
       "phase": {
         "type": "fixed_schedule",
-        "duration_seconds": 180,
-        "warmup_requests": 12
+        "duration_seconds": 1500,
+        "warmup_requests": 250
       }
     }
   ],
@@ -260,12 +259,12 @@
     {
       "id": "load",
       "description": "Replay each workload at increasing time-compression multipliers to find max sustainable goodput.",
-      "multipliers": [0.5, 1, 1.5, 2, 3]
+      "multipliers": [0.25, 0.5, 1, 2, 4, 8]
     },
     {
       "id": "throughput",
       "description": "Closed-loop concurrency sweep for raw saturation diagnostics.",
-      "concurrency": [1, 2, 4, 8, 16, 32, 64]
+      "concurrency": [1, 2, 4, 8, 16, 32, 64, 128, 256]
     }
   ]
 }

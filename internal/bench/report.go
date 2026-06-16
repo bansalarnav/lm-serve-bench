@@ -21,7 +21,11 @@ func PrintSuite(w io.Writer, suite Suite) {
 		fmt.Fprintf(w, "  traffic: %s\n", sourceNames(workload.TrafficSources))
 		fmt.Fprintf(w, "  prompts: %s\n", sourceNames(workload.PromptSources))
 		fmt.Fprintf(w, "  metrics: %s\n", strings.Join(workload.MetricsFocus, ", "))
-		fmt.Fprintf(w, "  cap: %d max output tokens, %d default requests\n", workload.MaxOutputTokens, workload.DefaultRequests)
+		if workload.Phase.TraceMode == "source_window" {
+			fmt.Fprintf(w, "  cap: %d max output tokens, source-window replay (%d configured requests)\n", workload.MaxOutputTokens, workload.DefaultRequests)
+		} else {
+			fmt.Fprintf(w, "  cap: %d max output tokens, %d default requests\n", workload.MaxOutputTokens, workload.DefaultRequests)
+		}
 	}
 
 	if len(suite.Sweeps) > 0 {

@@ -1,27 +1,20 @@
 {
   "version": 1,
-  "description": "Bundled source contract for the default lm-serve-bench benchmark data.",
+  "description": "Bundled source contract for the default lm-serve-bench benchmark data. Standard production trace files are high-variance 25-minute source windows when public exact traces are bundled.",
   "sources": [
-    {
-      "id": "burstgpt",
-      "kind": "trace",
-      "workload": "prod-chat",
-      "file": "data/bundled/traces/prod-chat.jsonl",
-      "notes": "Bursty production-chat arrival shape."
-    },
     {
       "id": "azure",
       "kind": "trace",
       "workload": "prod-chat",
       "file": "data/bundled/traces/prod-chat.jsonl",
-      "notes": "Production context-length shape."
+      "notes": "High-variance 25-minute window from Azure conversation trace; exact timestamps and context-token lengths are preserved."
     },
     {
       "id": "qwen-bailian",
       "kind": "trace",
       "workload": "prod-cache",
       "file": "data/bundled/traces/prod-cache.jsonl",
-      "notes": "Prefix-cache trace with repeated block hashes."
+      "notes": "High-variance 25-minute window from Qwen Bailian trace; exact timestamps, input lengths, and cache block hashes are preserved."
     },
     {
       "id": "ragpulse",
@@ -38,18 +31,11 @@
       "notes": "RAG system, retrieved context, history, and question records."
     },
     {
-      "id": "qwen-bailian-coder",
-      "kind": "trace",
-      "workload": "code-repo",
-      "file": "data/bundled/traces/code-repo.jsonl",
-      "notes": "Code workload arrival shape."
-    },
-    {
       "id": "azure",
       "kind": "trace",
       "workload": "code-repo",
       "file": "data/bundled/traces/code-repo.jsonl",
-      "notes": "Fallback code-like arrival and context length shape."
+      "notes": "High-variance 25-minute window from Azure code trace; exact timestamps and context-token lengths are preserved."
     },
     {
       "id": "swebench",
