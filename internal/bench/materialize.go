@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -34,6 +35,7 @@ type HarnessHint struct {
 
 type AIPerfTraceEntry struct {
 	Source      string `json:"_source,omitempty"`
+	Workload    string `json:"_workload,omitempty"`
 	Timestamp   int    `json:"timestamp"`
 	InputLength int    `json:"input_length,omitempty"`
 	InputText   string `json:"input_text,omitempty"`
@@ -278,6 +280,9 @@ func writeExpandedBundledTrace(path string, sourcePath string, workload Workload
 			entries = append([]AIPerfTraceEntry(nil), entries...)
 			normalizeTraceTimestamps(entries)
 		}
+		if workload.DefaultRequests > 0 && len(entries) > workload.DefaultRequests {
+			entries = downsampleTrace(entries, workload.DefaultRequests)
+		}
 		return writeTraceEntries(path, entries)
 	}
 
@@ -302,7 +307,49 @@ func writeExpandedBundledTrace(path string, sourcePath string, workload Workload
 			expanded = append(expanded, next)
 		}
 	}
+	scaleEntriesToDuration(expanded, workload.Phase.DurationSeconds)
 	return writeTraceEntries(path, expanded)
+}
+
+func downsampleTrace(entries []AIPerfTraceEntry, target int) []AIPerfTraceEntry {
+	if target <= 0 || len(entries) <= target {
+		return entries
+	}
+	if target == 1 {
+		return []AIPerfTraceEntry{entries[0]}
+	}
+
+	selected := make([]AIPerfTraceEntry, 0, target)
+	lastIndex := len(entries) - 1
+	lastTarget := target - 1
+	for i := 0; i < target; i++ {
+		index := i * lastIndex / lastTarget
+		selected = append(selected, entries[index])
+	}
+	return selected
+}
+
+func scaleEntriesToDuration(entries []AIPerfTraceEntry, durationSeconds int) {
+	if durationSeconds <= 0 || len(entries) == 0 {
+		return
+	}
+
+	targetMillis := durationSeconds * 1000
+	currentMillis := entries[len(entries)-1].Timestamp
+	if currentMillis <= 0 {
+		if len(entries) == 1 {
+			entries[0].Timestamp = 0
+			return
+		}
+		for i := range entries {
+			entries[i].Timestamp = i * targetMillis / (len(entries) - 1)
+		}
+		return
+	}
+
+	for i := range entries {
+		entries[i].Timestamp = int((int64(entries[i].Timestamp)*int64(targetMillis) + int64(currentMillis)/2) / int64(currentMillis))
+	}
 }
 
 func bundledTracePeriod(entries []AIPerfTraceEntry, workload Workload) int {
@@ -413,6 +460,175 @@ func writeScaledAIPerfTrace(path string, sourcePath string, multiplier float64) 
 		return err
 	}
 	return writer.Flush()
+}
+
+func ScaleWorkloadTraceDuration(workloadDir string, durationSeconds int) error {
+	if durationSeconds <= 0 {
+		return nil
+	}
+
+	tracePath := filepath.Join(workloadDir, "trace.jsonl")
+	entries, err := readTraceEntries(tracePath)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("%s has no trace entries", tracePath)
+	}
+
+	scaleEntriesToDuration(entries, durationSeconds)
+	return writeTraceEntries(tracePath, entries)
+}
+
+func MaterializeMixedReplay(suite Suite, outDir string, durationSeconds int) (Workload, error) {
+	if durationSeconds <= 0 {
+		durationSeconds = suite.DurationMinutes * 60
+	}
+	if durationSeconds <= 0 {
+		durationSeconds = 1500
+	}
+
+	mixed := Workload{
+		ID:              "overall",
+		Name:            "Overall mixed workload",
+		Category:        "mixed",
+		Description:     "All default workload categories interleaved into one fixed-schedule replay.",
+		Pairing:         "mixed_trace_replay",
+		MetricsFocus:    []string{"autoscaling", "queueing", "cache-pressure", "mixed-workload-goodput"},
+		MaxOutputTokens: mixedMaxOutputTokens(suite),
+		Phase: Phase{
+			Type:            "fixed_schedule",
+			DurationSeconds: durationSeconds,
+		},
+	}
+
+	var entries []AIPerfTraceEntry
+	for _, workload := range suite.Workloads {
+		tracePath := filepath.Join(outDir, workload.ID, "trace.jsonl")
+		workloadEntries, err := readTraceEntries(tracePath)
+		if err != nil {
+			return Workload{}, err
+		}
+		scaleEntriesToDuration(workloadEntries, durationSeconds)
+		for i := range workloadEntries {
+			workloadEntries[i].Workload = workload.ID
+		}
+		entries = append(entries, workloadEntries...)
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].Timestamp < entries[j].Timestamp
+	})
+	mixed.DefaultRequests = len(entries)
+
+	dir := filepath.Join(outDir, mixed.ID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Workload{}, err
+	}
+	if err := writeTraceEntries(filepath.Join(dir, "trace.jsonl"), entries); err != nil {
+		return Workload{}, err
+	}
+
+	data, err := json.MarshalIndent(MaterializedWorkload{
+		ID:              mixed.ID,
+		Name:            mixed.Name,
+		Category:        mixed.Category,
+		Description:     mixed.Description,
+		Pairing:         mixed.Pairing,
+		MetricsFocus:    mixed.MetricsFocus,
+		MaxOutputTokens: mixed.MaxOutputTokens,
+		DefaultRequests: mixed.DefaultRequests,
+		Phase:           mixed.Phase,
+		Harness:         aiperfHint(mixed),
+		BundledData: CorpusInfo{
+			Mode:     "mixed_trace_replay",
+			Requests: len(entries),
+			Notes:    "Interleaves all materialized workload traces over one replay window.",
+		},
+	}, "", "  ")
+	if err != nil {
+		return Workload{}, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "workload.json"), append(data, '\n'), 0o644); err != nil {
+		return Workload{}, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "aiperf.yaml"), []byte(aiperfYAML(mixed)), 0o644); err != nil {
+		return Workload{}, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "run.sh"), []byte(aiperfShell(mixed)), 0o755); err != nil {
+		return Workload{}, err
+	}
+	return mixed, nil
+}
+
+func mixedMaxOutputTokens(suite Suite) int {
+	value := 0
+	for _, workload := range suite.Workloads {
+		if maxOutputTokens(workload) > value {
+			value = maxOutputTokens(workload)
+		}
+	}
+	if value == 0 {
+		return 256
+	}
+	return value
+}
+
+func MaterializeRPSSweep(workloadDir string, workload Workload, targetRPS float64, steps int) error {
+	if targetRPS <= 0 {
+		return fmt.Errorf("target RPS must be greater than zero")
+	}
+	if steps <= 0 {
+		steps = 5
+	}
+
+	tracePath := filepath.Join(workloadDir, "trace.jsonl")
+	entries, err := readTraceEntries(tracePath)
+	if err != nil {
+		return err
+	}
+	baseRPS := traceRPS(entries, workload)
+	if baseRPS <= 0 {
+		return fmt.Errorf("%s has no measurable trace duration", workload.ID)
+	}
+
+	var stages []RPSSweepStage
+	for i := 1; i <= steps; i++ {
+		rps := targetRPS * float64(i) / float64(steps)
+		multiplier := rps / baseRPS
+		traceFile := fmt.Sprintf("trace-rps-%02d.jsonl", i)
+		if err := writeScaledAIPerfTrace(filepath.Join(workloadDir, traceFile), tracePath, multiplier); err != nil {
+			return err
+		}
+		stages = append(stages, RPSSweepStage{
+			Index:     i,
+			RPS:       rps,
+			TraceFile: traceFile,
+		})
+	}
+
+	script := aiperfRPSSweepShell(workload, stages)
+	return os.WriteFile(filepath.Join(workloadDir, "sweep-rps.sh"), []byte(script), 0o755)
+}
+
+type RPSSweepStage struct {
+	Index     int
+	RPS       float64
+	TraceFile string
+}
+
+func traceRPS(entries []AIPerfTraceEntry, workload Workload) float64 {
+	if len(entries) == 0 {
+		return 0
+	}
+	durationMillis := entries[len(entries)-1].Timestamp
+	if durationMillis <= 0 && workload.Phase.DurationSeconds > 0 {
+		durationMillis = workload.Phase.DurationSeconds * 1000
+	}
+	if durationMillis <= 0 {
+		return 0
+	}
+	return float64(len(entries)) / (float64(durationMillis) / 1000)
 }
 
 func writeAIPerfPool(path string, workload Workload) error {
@@ -682,6 +898,32 @@ ${AIPERF_BIN:-aiperf} profile \
   --artifact-dir "${ARTIFACT_DIR:-artifacts/%s/throughput-c%d}" \
   --extra-inputs temperature:0
 `, c, c, workload.DefaultRequests, maxOutputTokens(workload), workload.ID, c)
+	}
+	return script
+}
+
+func aiperfRPSSweepShell(workload Workload, stages []RPSSweepStage) string {
+	script := `#!/usr/bin/env sh
+set -eu
+cd "$(dirname "$0")"
+`
+	for _, stage := range stages {
+		artifactDir := fmt.Sprintf("artifacts/%s/rps-%02d-%.2f", workload.ID, stage.Index, stage.RPS)
+		script += fmt.Sprintf(`
+echo "rps ramp step %d target %.2f req/s"
+${AIPERF_BIN:-aiperf} profile \
+  --model "${MODEL_NAME:-Qwen/Qwen3-0.6B}" \
+  --endpoint-type chat \
+  --streaming \
+  --url "${INFERENCE_URL:-http://localhost:8000}" \
+  --input-file %s \
+  --custom-dataset-type mooncake_trace \
+  --fixed-schedule \
+  --fixed-schedule-auto-offset \
+  --osl %d \
+  --artifact-dir "${ARTIFACT_DIR:-%s}" \
+  --extra-inputs temperature:0
+`, stage.Index, stage.RPS, stage.TraceFile, maxOutputTokens(workload), artifactDir)
 	}
 	return script
 }

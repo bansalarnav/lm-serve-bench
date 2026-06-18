@@ -29,6 +29,6 @@ Files under `data/bundled/prompts/` are compact source-shaped prompt records:
 
 The default suite intentionally keeps seven reported workload categories. RAG and agentic sessions share implementation machinery, but they stay separate because RAG mostly stresses repeated retrieved context and prefill/cache behavior, while agentic traffic stresses inter-call gaps, session retention, and cache eviction under idle periods.
 
-The `convert` command is for maintainers to refresh or inspect candidate bundled data sources. It supports production traces (`bailian`, `burstgpt`, `azure`) and prompt/task datasets (`sharegpt`, `wildchat`, `blazedit`, `swebench`, `bigcodebench`, `longbench`, `infinitebench`, `ruler`, `taubench`, `tau2`, `ragpulse`). Use `-window 25m -select high-variance` for standard source-window imports.
+The `convert` command is for maintainers to refresh or inspect candidate bundled data sources. It supports production traces (`bailian`, `burstgpt`, `azure`) and prompt/task datasets (`sharegpt`, `wildchat`, `blazedit`, `swebench`, `bigcodebench`, `longbench`, `infinitebench`, `ruler`, `taubench`, `tau2`, `ragpulse`). Use `--window 25m --select high-variance` for standard source-window imports.
 
 Normal benchmark users should run `lm-serve-bench run` directly against an endpoint.

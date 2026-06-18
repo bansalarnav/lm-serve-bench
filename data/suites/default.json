@@ -137,7 +137,7 @@
       "pairing": "code_prompt_sampling_with_trace_arrivals",
       "metrics_focus": ["long-prefill", "decode-throughput", "code-workload-latency"],
       "max_output_tokens": 512,
-      "default_requests": 131765,
+      "default_requests": 80000,
       "phase": {
         "type": "fixed_schedule",
         "duration_seconds": 1500,
@@ -179,7 +179,7 @@
       "pairing": "native_long_prompt_bucket_sampling",
       "metrics_focus": ["prefill-throughput", "kv-memory-pressure", "effective-batch-size", "ttft"],
       "max_output_tokens": 128,
-      "default_requests": 120,
+      "default_requests": 240,
       "phase": {
         "type": "fixed_schedule",
         "duration_seconds": 1500,
@@ -218,7 +218,7 @@
       "pairing": "session_replay_with_client_delays",
       "metrics_focus": ["kv-retention", "cache-eviction", "session-latency", "autoscaling-under-idle-gaps"],
       "max_output_tokens": 256,
-      "default_requests": 8000,
+      "default_requests": 16000,
       "phase": {
         "type": "fixed_schedule",
         "duration_seconds": 1500,
@@ -265,6 +265,10 @@
       "id": "throughput",
       "description": "Closed-loop concurrency sweep for raw saturation diagnostics.",
       "concurrency": [1, 2, 4, 8, 16, 32, 64, 128, 256]
+    },
+    {
+      "id": "rps",
+      "description": "Trace-preserving RPS/QPS ramp generated at run time with --target-rps and --ramp-steps."
     }
   ]
 }

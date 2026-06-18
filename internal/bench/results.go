@@ -1,10 +1,12 @@
 package bench
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +32,7 @@ type WorkloadSummary struct {
 	ResultFile  string             `json:"result_file,omitempty"`
 	Metrics     map[string]float64 `json:"metrics,omitempty"`
 	Runs        []RunSummary       `json:"runs,omitempty"`
+	DerivedFrom string             `json:"derived_from,omitempty"`
 	Unavailable string             `json:"unavailable,omitempty"`
 }
 
@@ -38,6 +41,20 @@ type RunSummary struct {
 	ResultFile string             `json:"result_file"`
 	Metrics    map[string]float64 `json:"metrics,omitempty"`
 	Error      string             `json:"error,omitempty"`
+}
+
+type requestRecord struct {
+	Metadata struct {
+		SessionNum     int     `json:"session_num"`
+		RequestStartNS float64 `json:"request_start_ns"`
+		RequestEndNS   float64 `json:"request_end_ns"`
+	} `json:"metadata"`
+	Metrics map[string]requestMetric `json:"metrics"`
+}
+
+type requestMetric struct {
+	Value any    `json:"value"`
+	Unit  string `json:"unit"`
 }
 
 func SummarizeResults(suite Suite, outDir string) (SuiteSummary, error) {
@@ -91,6 +108,12 @@ func SummarizeResults(suite Suite, outDir string) (SuiteSummary, error) {
 			Metrics:    metrics,
 			Runs:       runs,
 		})
+		if workload.ID == "overall" {
+			derived, err := mixedWorkloadBreakdown(workloadDir, resultFiles[0], runs[0].Metrics)
+			if err == nil {
+				summary.Workloads = append(summary.Workloads, derived...)
+			}
+		}
 	}
 
 	summary.Overall = overallSummary(summary.Workloads)
@@ -108,7 +131,11 @@ func firstRunError(runs []RunSummary) string {
 
 func aggregateRunMetrics(runs []RunSummary) map[string]float64 {
 	aggregate := map[string]float64{}
-	latencyKeys := []string{"ttft_p50_ms", "ttft_p95_ms", "ttft_p99_ms", "latency_p50_ms", "latency_p95_ms", "latency_p99_ms"}
+	latencyKeys := []string{
+		"ttft_p50_ms", "ttft_p95_ms", "ttft_p99_ms",
+		"latency_p50_ms", "latency_p95_ms", "latency_p99_ms",
+		"tpot_p50_ms", "tpot_p95_ms", "tpot_p99_ms",
+	}
 	latencySums := map[string]float64{}
 	latencyCounts := map[string]int{}
 	count := 0
@@ -120,6 +147,7 @@ func aggregateRunMetrics(runs []RunSummary) map[string]float64 {
 		count++
 		aggregate["request_count"] += run.Metrics["request_count"]
 		aggregate["request_throughput"] += run.Metrics["request_throughput"]
+		aggregate["tps"] += run.Metrics["tps"]
 		aggregate["output_token_throughput"] += run.Metrics["output_token_throughput"]
 		for _, key := range latencyKeys {
 			if value, ok := run.Metrics[key]; ok {
@@ -130,6 +158,9 @@ func aggregateRunMetrics(runs []RunSummary) map[string]float64 {
 	}
 	if count == 0 {
 		return nil
+	}
+	if aggregate["tps"] == 0 && aggregate["output_token_throughput"] > 0 {
+		aggregate["tps"] = aggregate["output_token_throughput"]
 	}
 
 	for _, key := range latencyKeys {
@@ -201,6 +232,245 @@ func runName(workloadDir, resultFile string) string {
 	return parts[len(parts)-1]
 }
 
+func mixedWorkloadBreakdown(workloadDir string, resultFile string, overallMetrics map[string]float64) ([]WorkloadSummary, error) {
+	tracePath := filepath.Join(workloadDir, "trace.jsonl")
+	workloadByIndex, err := readTraceWorkloads(tracePath)
+	if err != nil {
+		return nil, err
+	}
+	if len(workloadByIndex) == 0 {
+		return nil, nil
+	}
+
+	recordsPath := filepath.Join(filepath.Dir(resultFile), "profile_export.jsonl")
+	records, err := readRequestRecords(recordsPath)
+	if err != nil {
+		return nil, err
+	}
+
+	duration := overallMetrics["benchmark_duration"]
+	if duration <= 0 {
+		duration = requestRecordsDurationSeconds(records)
+	}
+	if duration <= 0 {
+		duration = 1
+	}
+
+	grouped := map[string][]requestRecord{}
+	for _, record := range records {
+		if record.Metadata.SessionNum < 0 || record.Metadata.SessionNum >= len(workloadByIndex) {
+			continue
+		}
+		workloadID := workloadByIndex[record.Metadata.SessionNum]
+		if workloadID == "" {
+			continue
+		}
+		grouped[workloadID] = append(grouped[workloadID], record)
+	}
+
+	ids := make([]string, 0, len(grouped))
+	for id := range grouped {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	summaries := make([]WorkloadSummary, 0, len(ids))
+	for _, id := range ids {
+		metrics := metricsFromRequestRecords(grouped[id], duration)
+		summaries = append(summaries, WorkloadSummary{
+			ID:          id,
+			ResultFile:  recordsPath,
+			Metrics:     metrics,
+			DerivedFrom: "overall",
+			Runs: []RunSummary{
+				{
+					Name:       "derived-from-overall",
+					ResultFile: recordsPath,
+					Metrics:    metrics,
+				},
+			},
+		})
+	}
+	return summaries, nil
+}
+
+func readTraceWorkloads(path string) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var workloads []string
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024), 16*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var entry struct {
+			Workload string `json:"_workload"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			return nil, err
+		}
+		workloads = append(workloads, entry.Workload)
+	}
+	return workloads, scanner.Err()
+}
+
+func readRequestRecords(path string) ([]requestRecord, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var records []requestRecord
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024), 16*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var record requestRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, scanner.Err()
+}
+
+func requestRecordsDurationSeconds(records []requestRecord) float64 {
+	if len(records) == 0 {
+		return 0
+	}
+	minStart := math.Inf(1)
+	maxEnd := 0.0
+	for _, record := range records {
+		if record.Metadata.RequestStartNS > 0 && record.Metadata.RequestStartNS < minStart {
+			minStart = record.Metadata.RequestStartNS
+		}
+		if record.Metadata.RequestEndNS > maxEnd {
+			maxEnd = record.Metadata.RequestEndNS
+		}
+	}
+	if math.IsInf(minStart, 1) || maxEnd <= minStart {
+		return 0
+	}
+	return (maxEnd - minStart) / 1e9
+}
+
+func metricsFromRequestRecords(records []requestRecord, durationSeconds float64) map[string]float64 {
+	metrics := map[string]float64{
+		"request_count": float64(len(records)),
+	}
+	if len(records) == 0 {
+		return metrics
+	}
+	if durationSeconds > 0 {
+		metrics["request_throughput"] = float64(len(records)) / durationSeconds
+	}
+
+	addRequestMetricStats(metrics, records, "time_to_first_token", "ttft")
+	addRequestMetricStats(metrics, records, "request_latency", "latency")
+	addRequestMetricStats(metrics, records, "inter_token_latency", "tpot")
+	addRequestMetricStats(metrics, records, "input_sequence_length", "input_sequence_length")
+	addRequestMetricStats(metrics, records, "output_sequence_length", "output_sequence_length")
+
+	outputTokens := sumRequestMetric(records, "output_token_count")
+	if outputTokens == 0 {
+		outputTokens = sumRequestMetric(records, "output_sequence_length")
+	}
+	if outputTokens > 0 {
+		metrics["output_token_count"] = outputTokens
+		if durationSeconds > 0 {
+			metrics["output_token_throughput"] = outputTokens / durationSeconds
+			metrics["tps"] = outputTokens / durationSeconds
+		}
+	}
+	return metrics
+}
+
+func addRequestMetricStats(out map[string]float64, records []requestRecord, sourceKey string, outputPrefix string) {
+	values := requestMetricValues(records, sourceKey)
+	if len(values) == 0 {
+		return
+	}
+	sort.Float64s(values)
+	out[outputPrefix+"_avg"] = mean(values)
+	out[outputPrefix+"_p50_ms"] = percentile(values, 0.50)
+	out[outputPrefix+"_p95_ms"] = percentile(values, 0.95)
+	out[outputPrefix+"_p99_ms"] = percentile(values, 0.99)
+	if outputPrefix == "input_sequence_length" || outputPrefix == "output_sequence_length" {
+		delete(out, outputPrefix+"_p50_ms")
+		delete(out, outputPrefix+"_p95_ms")
+		delete(out, outputPrefix+"_p99_ms")
+		out[outputPrefix+"_p50"] = percentile(values, 0.50)
+		out[outputPrefix+"_p95"] = percentile(values, 0.95)
+		out[outputPrefix+"_p99"] = percentile(values, 0.99)
+	}
+}
+
+func requestMetricValues(records []requestRecord, key string) []float64 {
+	values := make([]float64, 0, len(records))
+	for _, record := range records {
+		if value, ok := requestMetricFloat(record.Metrics[key]); ok {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func sumRequestMetric(records []requestRecord, key string) float64 {
+	sum := 0.0
+	for _, record := range records {
+		if value, ok := requestMetricFloat(record.Metrics[key]); ok {
+			sum += value
+		}
+	}
+	return sum
+}
+
+func requestMetricFloat(metric requestMetric) (float64, bool) {
+	switch typed := metric.Value.(type) {
+	case float64:
+		return typed, true
+	case int:
+		return float64(typed), true
+	default:
+		return 0, false
+	}
+}
+
+func mean(values []float64) float64 {
+	sum := 0.0
+	for _, value := range values {
+		sum += value
+	}
+	return sum / float64(len(values))
+}
+
+func percentile(sorted []float64, q float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if len(sorted) == 1 {
+		return sorted[0]
+	}
+	position := q * float64(len(sorted)-1)
+	lower := int(math.Floor(position))
+	upper := int(math.Ceil(position))
+	if lower == upper {
+		return sorted[lower]
+	}
+	weight := position - float64(lower)
+	return sorted[lower]*(1-weight) + sorted[upper]*weight
+}
+
 func extractMetrics(path string) (map[string]float64, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -234,6 +504,7 @@ func knownAIPerfMetrics(value any) map[string]float64 {
 	metrics := map[string]float64{}
 	copyMetricAverage(metrics, root, "request_throughput", "request_throughput")
 	copyMetricAverage(metrics, root, "output_token_throughput", "output_token_throughput")
+	copyMetricAverage(metrics, root, "output_token_throughput", "tps")
 	copyMetricAverage(metrics, root, "request_count", "request_count")
 	copyMetricPercentile(metrics, root, "time_to_first_token", "ttft_p50_ms", "p50")
 	copyMetricPercentile(metrics, root, "time_to_first_token", "ttft_p95_ms", "p95")
@@ -241,6 +512,9 @@ func knownAIPerfMetrics(value any) map[string]float64 {
 	copyMetricPercentile(metrics, root, "request_latency", "latency_p50_ms", "p50")
 	copyMetricPercentile(metrics, root, "request_latency", "latency_p95_ms", "p95")
 	copyMetricPercentile(metrics, root, "request_latency", "latency_p99_ms", "p99")
+	copyMetricPercentile(metrics, root, "inter_token_latency", "tpot_p50_ms", "p50")
+	copyMetricPercentile(metrics, root, "inter_token_latency", "tpot_p95_ms", "p95")
+	copyMetricPercentile(metrics, root, "inter_token_latency", "tpot_p99_ms", "p99")
 	copyMetricAverage(metrics, root, "input_sequence_length", "input_sequence_length_avg")
 	copyMetricAverage(metrics, root, "output_sequence_length", "output_sequence_length_avg")
 	return metrics
@@ -289,12 +563,16 @@ func selectMetrics(found map[string]float64) map[string]float64 {
 	preferred := map[string][]string{
 		"request_throughput":      {"request throughput", "request_throughput", "requestthroughput", "requests/sec"},
 		"output_token_throughput": {"output token throughput", "output_token_throughput", "outputtokenthroughput", "tokens/sec"},
+		"tps":                     {"output token throughput", "tokens/sec", "tps"},
 		"ttft_p50_ms":             {"time to first token p50", "ttft p50", "time_to_first_token.p50"},
 		"ttft_p95_ms":             {"time to first token p95", "ttft p95", "time_to_first_token.p95"},
 		"ttft_p99_ms":             {"time to first token p99", "ttft p99", "time_to_first_token.p99"},
 		"latency_p50_ms":          {"request latency p50", "latency p50", "request_latency.p50"},
 		"latency_p95_ms":          {"request latency p95", "latency p95", "request_latency.p95"},
 		"latency_p99_ms":          {"request latency p99", "latency p99", "request_latency.p99"},
+		"tpot_p50_ms":             {"inter token latency p50", "tpot p50", "inter_token_latency.p50"},
+		"tpot_p95_ms":             {"inter token latency p95", "tpot p95", "inter_token_latency.p95"},
+		"tpot_p99_ms":             {"inter token latency p99", "tpot p99", "inter_token_latency.p99"},
 		"request_count":           {"request count", "request_count", "requestcount"},
 	}
 
@@ -374,6 +652,8 @@ func summaryMarkdown(summary SuiteSummary) string {
 		if workload.Unavailable != "" {
 			status = workload.Unavailable
 			metrics = ""
+		} else if workload.DerivedFrom != "" {
+			status = "derived from " + workload.DerivedFrom
 		} else if len(workload.Runs) > 1 {
 			metrics = fmt.Sprintf("%d runs<br>%s", len(workload.Runs), metrics)
 		}
@@ -388,13 +668,20 @@ func overallSummary(workloads []WorkloadSummary) OverallSummary {
 		Metrics:        map[string]float64{},
 	}
 
-	latencyKeys := []string{"ttft_p50_ms", "ttft_p95_ms", "ttft_p99_ms", "latency_p50_ms", "latency_p95_ms", "latency_p99_ms"}
+	latencyKeys := []string{
+		"ttft_p50_ms", "ttft_p95_ms", "ttft_p99_ms",
+		"latency_p50_ms", "latency_p95_ms", "latency_p99_ms",
+		"tpot_p50_ms", "tpot_p95_ms", "tpot_p99_ms",
+	}
 	latencySums := map[string]float64{}
 	latencyCounts := map[string]int{}
 
 	for _, workload := range workloads {
 		if workload.Unavailable == "" && len(workload.Metrics) > 0 {
 			overall.CompletedWorkloads++
+		}
+		if workload.DerivedFrom != "" {
+			continue
 		}
 		for _, run := range workload.Runs {
 			if run.Error != "" || len(run.Metrics) == 0 {
@@ -403,6 +690,7 @@ func overallSummary(workloads []WorkloadSummary) OverallSummary {
 			overall.CompletedRuns++
 			overall.TotalRequestCount += run.Metrics["request_count"]
 			overall.Metrics["request_throughput"] += run.Metrics["request_throughput"]
+			overall.Metrics["tps"] += run.Metrics["tps"]
 			overall.Metrics["output_token_throughput"] += run.Metrics["output_token_throughput"]
 			for _, key := range latencyKeys {
 				if value, ok := run.Metrics[key]; ok {
@@ -417,6 +705,9 @@ func overallSummary(workloads []WorkloadSummary) OverallSummary {
 		if latencyCounts[key] > 0 {
 			overall.Metrics["mean_"+key] = latencySums[key] / float64(latencyCounts[key])
 		}
+	}
+	if overall.Metrics["tps"] == 0 && overall.Metrics["output_token_throughput"] > 0 {
+		overall.Metrics["tps"] = overall.Metrics["output_token_throughput"]
 	}
 	for key, value := range overall.Metrics {
 		if value == 0 {

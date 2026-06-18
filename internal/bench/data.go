@@ -189,6 +189,9 @@ func corpusInfo(workload Workload) CorpusInfo {
 		info.TraceSources = sourceMix(traceRecords, traceDefaultSource(workload.ID))
 		if workload.Phase.TraceMode == "source_window" {
 			info.Requests = len(traceRecords)
+			if workload.DefaultRequests > 0 && workload.DefaultRequests < info.Requests {
+				info.Requests = workload.DefaultRequests
+			}
 		}
 	}
 
