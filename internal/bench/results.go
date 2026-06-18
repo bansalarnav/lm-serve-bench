@@ -131,11 +131,7 @@ func firstRunError(runs []RunSummary) string {
 
 func aggregateRunMetrics(runs []RunSummary) map[string]float64 {
 	aggregate := map[string]float64{}
-	latencyKeys := []string{
-		"ttft_p50_ms", "ttft_p95_ms", "ttft_p99_ms",
-		"latency_p50_ms", "latency_p95_ms", "latency_p99_ms",
-		"tpot_p50_ms", "tpot_p95_ms", "tpot_p99_ms",
-	}
+	latencyKeys := timedDistributionMetricKeys()
 	latencySums := map[string]float64{}
 	latencyCounts := map[string]int{}
 	count := 0
@@ -401,18 +397,27 @@ func addRequestMetricStats(out map[string]float64, records []requestRecord, sour
 		return
 	}
 	sort.Float64s(values)
-	out[outputPrefix+"_avg"] = mean(values)
-	out[outputPrefix+"_p50_ms"] = percentile(values, 0.50)
-	out[outputPrefix+"_p95_ms"] = percentile(values, 0.95)
-	out[outputPrefix+"_p99_ms"] = percentile(values, 0.99)
 	if outputPrefix == "input_sequence_length" || outputPrefix == "output_sequence_length" {
-		delete(out, outputPrefix+"_p50_ms")
-		delete(out, outputPrefix+"_p95_ms")
-		delete(out, outputPrefix+"_p99_ms")
+		out[outputPrefix+"_avg"] = mean(values)
 		out[outputPrefix+"_p50"] = percentile(values, 0.50)
 		out[outputPrefix+"_p95"] = percentile(values, 0.95)
 		out[outputPrefix+"_p99"] = percentile(values, 0.99)
+		return
 	}
+
+	out[outputPrefix+"_avg_ms"] = mean(values)
+	out[outputPrefix+"_min_ms"] = values[0]
+	out[outputPrefix+"_max_ms"] = values[len(values)-1]
+	out[outputPrefix+"_p1_ms"] = percentile(values, 0.01)
+	out[outputPrefix+"_p5_ms"] = percentile(values, 0.05)
+	out[outputPrefix+"_p10_ms"] = percentile(values, 0.10)
+	out[outputPrefix+"_p25_ms"] = percentile(values, 0.25)
+	out[outputPrefix+"_p50_ms"] = percentile(values, 0.50)
+	out[outputPrefix+"_p75_ms"] = percentile(values, 0.75)
+	out[outputPrefix+"_p90_ms"] = percentile(values, 0.90)
+	out[outputPrefix+"_p95_ms"] = percentile(values, 0.95)
+	out[outputPrefix+"_p99_ms"] = percentile(values, 0.99)
+	out[outputPrefix+"_std_ms"] = stddev(values)
 }
 
 func requestMetricValues(records []requestRecord, key string) []float64 {
@@ -452,6 +457,19 @@ func mean(values []float64) float64 {
 		sum += value
 	}
 	return sum / float64(len(values))
+}
+
+func stddev(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	avg := mean(values)
+	sum := 0.0
+	for _, value := range values {
+		delta := value - avg
+		sum += delta * delta
+	}
+	return math.Sqrt(sum / float64(len(values)))
 }
 
 func percentile(sorted []float64, q float64) float64 {
@@ -506,15 +524,9 @@ func knownAIPerfMetrics(value any) map[string]float64 {
 	copyMetricAverage(metrics, root, "output_token_throughput", "output_token_throughput")
 	copyMetricAverage(metrics, root, "output_token_throughput", "tps")
 	copyMetricAverage(metrics, root, "request_count", "request_count")
-	copyMetricPercentile(metrics, root, "time_to_first_token", "ttft_p50_ms", "p50")
-	copyMetricPercentile(metrics, root, "time_to_first_token", "ttft_p95_ms", "p95")
-	copyMetricPercentile(metrics, root, "time_to_first_token", "ttft_p99_ms", "p99")
-	copyMetricPercentile(metrics, root, "request_latency", "latency_p50_ms", "p50")
-	copyMetricPercentile(metrics, root, "request_latency", "latency_p95_ms", "p95")
-	copyMetricPercentile(metrics, root, "request_latency", "latency_p99_ms", "p99")
-	copyMetricPercentile(metrics, root, "inter_token_latency", "tpot_p50_ms", "p50")
-	copyMetricPercentile(metrics, root, "inter_token_latency", "tpot_p95_ms", "p95")
-	copyMetricPercentile(metrics, root, "inter_token_latency", "tpot_p99_ms", "p99")
+	copyMetricDistribution(metrics, root, "time_to_first_token", "ttft")
+	copyMetricDistribution(metrics, root, "request_latency", "latency")
+	copyMetricDistribution(metrics, root, "inter_token_latency", "tpot")
 	copyMetricAverage(metrics, root, "input_sequence_length", "input_sequence_length_avg")
 	copyMetricAverage(metrics, root, "output_sequence_length", "output_sequence_length_avg")
 	return metrics
@@ -534,6 +546,20 @@ func copyMetricPercentile(out map[string]float64, root map[string]any, sourceKey
 		return
 	}
 	out[outputKey] = value
+}
+
+func copyMetricDistribution(out map[string]float64, root map[string]any, sourceKey string, outputPrefix string) {
+	metric, ok := root[sourceKey].(map[string]any)
+	if !ok {
+		return
+	}
+	for _, stat := range distributionStats() {
+		value, ok := metric[stat].(float64)
+		if !ok {
+			continue
+		}
+		out[outputPrefix+"_"+stat+"_ms"] = value
+	}
 }
 
 func walkMetrics(value any, path string, found map[string]float64) {
@@ -564,16 +590,25 @@ func selectMetrics(found map[string]float64) map[string]float64 {
 		"request_throughput":      {"request throughput", "request_throughput", "requestthroughput", "requests/sec"},
 		"output_token_throughput": {"output token throughput", "output_token_throughput", "outputtokenthroughput", "tokens/sec"},
 		"tps":                     {"output token throughput", "tokens/sec", "tps"},
-		"ttft_p50_ms":             {"time to first token p50", "ttft p50", "time_to_first_token.p50"},
-		"ttft_p95_ms":             {"time to first token p95", "ttft p95", "time_to_first_token.p95"},
-		"ttft_p99_ms":             {"time to first token p99", "ttft p99", "time_to_first_token.p99"},
-		"latency_p50_ms":          {"request latency p50", "latency p50", "request_latency.p50"},
-		"latency_p95_ms":          {"request latency p95", "latency p95", "request_latency.p95"},
-		"latency_p99_ms":          {"request latency p99", "latency p99", "request_latency.p99"},
-		"tpot_p50_ms":             {"inter token latency p50", "tpot p50", "inter_token_latency.p50"},
-		"tpot_p95_ms":             {"inter token latency p95", "tpot p95", "inter_token_latency.p95"},
-		"tpot_p99_ms":             {"inter token latency p99", "tpot p99", "inter_token_latency.p99"},
 		"request_count":           {"request count", "request_count", "requestcount"},
+	}
+	for _, metric := range []struct {
+		prefix string
+		source string
+		label  string
+	}{
+		{"ttft", "time_to_first_token", "time to first token"},
+		{"latency", "request_latency", "request latency"},
+		{"tpot", "inter_token_latency", "inter token latency"},
+	} {
+		for _, stat := range distributionStats() {
+			key := metric.prefix + "_" + stat + "_ms"
+			preferred[key] = []string{
+				metric.label + " " + stat,
+				metric.prefix + " " + stat,
+				metric.source + "." + stat,
+			}
+		}
 	}
 
 	for output, candidates := range preferred {
@@ -668,11 +703,7 @@ func overallSummary(workloads []WorkloadSummary) OverallSummary {
 		Metrics:        map[string]float64{},
 	}
 
-	latencyKeys := []string{
-		"ttft_p50_ms", "ttft_p95_ms", "ttft_p99_ms",
-		"latency_p50_ms", "latency_p95_ms", "latency_p99_ms",
-		"tpot_p50_ms", "tpot_p95_ms", "tpot_p99_ms",
-	}
+	latencyKeys := timedDistributionMetricKeys()
 	latencySums := map[string]float64{}
 	latencyCounts := map[string]int{}
 
@@ -715,6 +746,22 @@ func overallSummary(workloads []WorkloadSummary) OverallSummary {
 		}
 	}
 	return overall
+}
+
+func distributionStats() []string {
+	return []string{"avg", "min", "max", "p1", "p5", "p10", "p25", "p50", "p75", "p90", "p95", "p99", "std"}
+}
+
+func timedDistributionMetricKeys() []string {
+	prefixes := []string{"ttft", "latency", "tpot"}
+	stats := distributionStats()
+	keys := make([]string, 0, len(prefixes)*len(stats))
+	for _, prefix := range prefixes {
+		for _, stat := range stats {
+			keys = append(keys, prefix+"_"+stat+"_ms")
+		}
+	}
+	return keys
 }
 
 func formatMetrics(metrics map[string]float64) string {
