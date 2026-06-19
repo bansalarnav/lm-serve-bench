@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -42,19 +41,10 @@ type AIPerfTraceEntry struct {
 	HashIDs     []int  `json:"hash_ids,omitempty"`
 }
 
-type MaterializeOptions struct {
-	TraceDir  string
-	PromptDir string
-}
-
 const bundledPromptDir = "data/bundled/prompts"
 const bundledTraceDir = "data/bundled/traces"
 
 func MaterializeSuite(suite Suite, outDir string) error {
-	return MaterializeSuiteWithOptions(suite, outDir, MaterializeOptions{})
-}
-
-func MaterializeSuiteWithOptions(suite Suite, outDir string, opts MaterializeOptions) error {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
 	}
@@ -89,13 +79,10 @@ func MaterializeSuiteWithOptions(suite Suite, outDir string, opts MaterializeOpt
 			return err
 		}
 		tracePath := filepath.Join(dir, "trace.jsonl")
-		if err := writeOrCopyTrace(tracePath, workload, opts.TraceDir); err != nil {
+		if err := writeOrCopyTrace(tracePath, workload); err != nil {
 			return err
 		}
-		if err := applyPromptOverride(tracePath, workload, opts.PromptDir); err != nil {
-			return err
-		}
-		if err := writeOrCopyPool(filepath.Join(dir, "pool.jsonl"), workload, opts.PromptDir); err != nil {
+		if err := writeOrCopyPool(filepath.Join(dir, "pool.jsonl"), workload); err != nil {
 			return err
 		}
 		for _, multiplier := range loadMultipliers(suite.Sweeps) {
@@ -125,10 +112,6 @@ func MaterializeSuiteWithOptions(suite Suite, outDir string, opts MaterializeOpt
 	return os.WriteFile(filepath.Join(outDir, "suite.json"), append(index, '\n'), 0o644)
 }
 
-func applyPromptOverride(tracePath string, workload Workload, promptDir string) error {
-	return nil
-}
-
 func padPromptToApproxTokens(prompt string, targetTokens int) string {
 	if targetTokens <= 0 {
 		return prompt
@@ -147,8 +130,8 @@ func padPromptToApproxTokens(prompt string, targetTokens int) string {
 	return b.String()
 }
 
-func writeOrCopyPool(path string, workload Workload, promptDir string) error {
-	prompts, err := workloadPrompts(workload, promptDir)
+func writeOrCopyPool(path string, workload Workload) error {
+	prompts, err := workloadPrompts(workload)
 	if err != nil {
 		return err
 	}
@@ -186,11 +169,8 @@ func writeOrCopyPool(path string, workload Workload, promptDir string) error {
 	return writer.Flush()
 }
 
-func workloadPrompts(workload Workload, promptDir string) ([]string, error) {
-	if promptDir == "" {
-		promptDir = bundledPromptDir
-	}
-	path := filepath.Join(promptDir, workload.ID+".jsonl")
+func workloadPrompts(workload Workload) ([]string, error) {
+	path := filepath.Join(bundledPromptDir, workload.ID+".jsonl")
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -244,24 +224,13 @@ func writeTraceEntries(path string, entries []AIPerfTraceEntry) error {
 	return writer.Flush()
 }
 
-func writeOrCopyTrace(path string, workload Workload, traceDir string) error {
-	if traceDir == "" {
-		bundled := filepath.Join(bundledTraceDir, workload.ID+".jsonl")
-		if _, err := os.Stat(bundled); err == nil {
-			return writeExpandedBundledTrace(path, bundled, workload)
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-		return writeAIPerfTrace(path, workload)
-	}
-
-	override := filepath.Join(traceDir, workload.ID+".jsonl")
-	if _, err := os.Stat(override); err == nil {
-		return copyFile(override, path)
+func writeOrCopyTrace(path string, workload Workload) error {
+	bundled := filepath.Join(bundledTraceDir, workload.ID+".jsonl")
+	if _, err := os.Stat(bundled); err == nil {
+		return writeExpandedBundledTrace(path, bundled, workload)
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-
 	return writeAIPerfTrace(path, workload)
 }
 
@@ -368,25 +337,6 @@ func bundledTracePeriod(entries []AIPerfTraceEntry, workload Workload) int {
 		gap = 1000
 	}
 	return last + gap
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Close()
 }
 
 func aiperfHint(workload Workload) HarnessHint {

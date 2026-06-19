@@ -29,6 +29,4 @@ Files under `data/bundled/prompts/` are compact source-shaped prompt records:
 
 The default suite intentionally keeps seven reported workload categories. RAG and agentic sessions share implementation machinery, but they stay separate because RAG mostly stresses repeated retrieved context and prefill/cache behavior, while agentic traffic stresses inter-call gaps, session retention, and cache eviction under idle periods.
 
-The import/conversion code is only for maintainers refreshing bundled data. It supports production traces (`bailian`, `burstgpt`, `azure`) and prompt/task datasets (`sharegpt`, `wildchat`, `blazedit`, `swebench`, `bigcodebench`, `longbench`, `infinitebench`, `ruler`, `taubench`, `tau2`, `ragpulse`).
-
 Normal benchmark users should run `lm-serve-bench run` directly against an endpoint.

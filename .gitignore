@@ -1,4 +1,4 @@
 .gocache/
 .venv/
-lm-serve-bench
+/lm-serve-bench
 out/

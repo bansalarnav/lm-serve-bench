@@ -21,4 +21,4 @@ COPY docs ./docs
 COPY README.md ./README.md
 
 ENTRYPOINT ["lm-serve-bench"]
-CMD ["list"]
+CMD ["run"]
