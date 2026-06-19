@@ -23,9 +23,6 @@ Replay runs, load sweeps, and RPS ramps use `mooncake_trace` fixed schedules. Th
 ## Run locally
 
 ```sh
-go run ./cmd/lm-serve-bench doctor
-go run ./cmd/lm-serve-bench validate-data
-go run ./cmd/lm-serve-bench prepare --out out/default
 go run ./cmd/lm-serve-bench run \
   --endpoint http://localhost:8000 \
   --model Qwen/Qwen3-0.6B \
@@ -55,8 +52,6 @@ go run ./cmd/lm-serve-bench run \
   --sweep rps \
   --target-rps 100 \
   --ramp-steps 5
-
-go run ./cmd/lm-serve-bench summarize --out out/default
 ```
 
 `--workload all` is the aggregate benchmark path. It builds one mixed `overall` trace by interleaving all workload traces over the same replay window, then runs that trace once. The summary includes aggregate `overall` metrics plus per-workload metrics derived from AIPerf's request-level export and the `_workload` tags in `overall/trace.jsonl`. Key metrics include request throughput, TPS (`tps`, output tokens/sec), TPOT (`tpot_*_ms`, from inter-token latency), TTFT, request latency, and input/output sequence lengths.
@@ -69,15 +64,6 @@ The RPS/QPS ramp is trace-preserving. It computes the workload's baseline reques
 
 The `smoke` suite is intentionally tiny and uses the same AIPerf fixed-schedule path as the default suite.
 
-The fastest full-stack check is:
-
-```sh
-go run ./cmd/lm-serve-bench self-test
-```
-
-It starts a mock OpenAI-compatible endpoint in-process, runs AIPerf against it, and writes `summary.json` / `summary.md`.
-Because it binds a local HTTP server, sandboxed environments must allow localhost listening.
-
 Start the mock OpenAI-compatible endpoint:
 
 ```sh
@@ -87,10 +73,6 @@ go run ./cmd/lm-serve-bench mock-server --addr 127.0.0.1:18080
 In another terminal, run the smoke benchmark:
 
 ```sh
-go run ./cmd/lm-serve-bench doctor \
-  --endpoint http://127.0.0.1:18080 \
-  --model mock
-
 go run ./cmd/lm-serve-bench run \
   --suite data/suites/smoke.json \
   --out out/smoke-run \
@@ -138,59 +120,9 @@ go run ./cmd/lm-serve-bench run \
 The normal benchmark path uses bundled deterministic workload data generated from the suite. Users should not provide their own traces or prompt pools for comparable benchmark results.
 Source-window traces are replayed exactly as bundled. Fixture traces are expanded deterministically to the workload request count before AIPerf runs.
 
-Validate the bundled corpus with:
-
-```sh
-go run ./cmd/lm-serve-bench validate-data
-```
-
-The `convert` command is a maintainer/import utility for refreshing bundled data from upstream public sources. Production traces can be converted into the same AIPerf fixed-schedule format:
-
-```sh
-go run ./cmd/lm-serve-bench convert \
-  --source bailian \
-  --input qwen_traceA_blksz_16.jsonl \
-  --output out/qwen_traceA.jsonl \
-  --window 25m \
-  --select high-variance
-
-go run ./cmd/lm-serve-bench convert \
-  --source burstgpt \
-  --input BurstGPT.csv \
-  --output out/burstgpt.jsonl \
-  --limit 10000
-
-go run ./cmd/lm-serve-bench convert \
-  --source azure \
-  --input AzureLLMInferenceTrace.csv \
-  --output out/azure.jsonl \
-  --window 25m \
-  --select high-variance
-```
-
-Converters preserve timing and input length. `--window` emits a contiguous wall-clock slice, and `--select high-variance` chooses the slice with dense traffic, varied input lengths, and bursty gaps. Bailian conversion also preserves `hash_ids`. Per-request source output lengths are intentionally not emitted as AIPerf `output_length`.
-
-Prompt/task datasets can also be rendered into AIPerf JSONL:
-
-```sh
-go run ./cmd/lm-serve-bench convert \
-  --source swebench \
-  --input swebench_lite.jsonl \
-  --output data/imports/code-repo-swebench.jsonl \
-  --limit 1000
-
-go run ./cmd/lm-serve-bench convert \
-  --source longbench \
-  --input longbench_v2.jsonl \
-  --output data/imports/long-context-longbench.jsonl \
-  --limit 200
-```
-
-Supported import sources are `bailian`, `burstgpt`, `azure`, `sharegpt`, `wildchat`, `blazedit`, `swebench`, `bigcodebench`, `longbench`, `infinitebench`, `ruler`, `taubench`, `tau2`, and `ragpulse`.
-
 ## Summaries
 
-`summarize` reads all AIPerf JSON exports below each workload directory. A normal replay usually has one export. Load and throughput sweeps have multiple exports, so the workload-level metrics aggregate successful runs while `summary.json` keeps every individual run and result path.
+`run` writes `summary.json` and `summary.md` after AIPerf exits, then prints terminal tables and compact ASCII sweep graphs. A normal replay usually has one export. Load, throughput, and RPS sweeps have multiple exports, so the workload-level metrics aggregate successful runs while `summary.json` keeps every individual run and result path.
 
 ## Run from Docker
 

@@ -191,6 +191,54 @@ func PrintSummary(summary SuiteSummary) string {
 	return summaryMarkdown(summary)
 }
 
+func PrintTerminalSummary(summary SuiteSummary) string {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "\nlm-serve-bench results\n")
+	fmt.Fprintf(&buf, "artifacts: %s\n\n", summary.ArtifactDir)
+
+	overallRows := [][]string{
+		{"completed workloads", fmt.Sprintf("%d/%d", summary.Overall.CompletedWorkloads, summary.Overall.TotalWorkloads)},
+		{"completed runs", fmt.Sprintf("%d", summary.Overall.CompletedRuns)},
+	}
+	if summary.Overall.TotalRequestCount > 0 {
+		overallRows = append(overallRows, []string{"total requests", formatCount(summary.Overall.TotalRequestCount)})
+	}
+	overallRows = append(overallRows,
+		[]string{"request throughput", formatMetric(summary.Overall.Metrics, "request_throughput", " req/s")},
+		[]string{"token throughput", formatMetric(summary.Overall.Metrics, "tps", " tok/s")},
+		[]string{"TTFT p90", formatMetric(summary.Overall.Metrics, "ttft_p90_ms", " ms")},
+		[]string{"latency p90", formatMetric(summary.Overall.Metrics, "latency_p90_ms", " ms")},
+		[]string{"TPOT p90", formatMetric(summary.Overall.Metrics, "tpot_p90_ms", " ms")},
+	)
+	buf.WriteString(renderTable([]string{"overall", "value"}, overallRows))
+	buf.WriteByte('\n')
+
+	workloadRows := make([][]string, 0, len(summary.Workloads))
+	for _, workload := range summary.Workloads {
+		workloadRows = append(workloadRows, []string{
+			workload.ID,
+			workloadTerminalStatus(workload),
+			formatRequestCount(workload.Metrics),
+			formatMetric(workload.Metrics, "request_throughput", ""),
+			formatMetric(workload.Metrics, "tps", ""),
+			formatMetric(workload.Metrics, "ttft_p90_ms", ""),
+			formatMetric(workload.Metrics, "latency_p90_ms", ""),
+			formatMetric(workload.Metrics, "tpot_p90_ms", ""),
+		})
+	}
+	buf.WriteString(renderTable(
+		[]string{"workload", "status", "requests", "req/s", "tok/s", "ttft p90 ms", "lat p90 ms", "tpot p90 ms"},
+		workloadRows,
+	))
+
+	charts := terminalSweepCharts(summary.Workloads)
+	if charts != "" {
+		buf.WriteByte('\n')
+		buf.WriteString(charts)
+	}
+	return buf.String()
+}
+
 func findAIPerfJSON(root string) ([]string, error) {
 	var matches []string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
@@ -762,6 +810,166 @@ func timedDistributionMetricKeys() []string {
 		}
 	}
 	return keys
+}
+
+func workloadTerminalStatus(workload WorkloadSummary) string {
+	if workload.Unavailable != "" {
+		return workload.Unavailable
+	}
+	if workload.DerivedFrom != "" {
+		return "derived"
+	}
+	if len(workload.Runs) > 1 {
+		return fmt.Sprintf("%d runs", len(workload.Runs))
+	}
+	return "ok"
+}
+
+func formatMetric(metrics map[string]float64, key string, suffix string) string {
+	value, ok := metricValue(metrics, key)
+	if !ok {
+		return "-"
+	}
+	return formatFloat(value) + suffix
+}
+
+func formatRequestCount(metrics map[string]float64) string {
+	value, ok := metricValue(metrics, "request_count")
+	if !ok {
+		return "-"
+	}
+	return formatCount(value)
+}
+
+func metricValue(metrics map[string]float64, key string) (float64, bool) {
+	if len(metrics) == 0 {
+		return 0, false
+	}
+	if value, ok := metrics[key]; ok {
+		return value, true
+	}
+	value, ok := metrics["mean_"+key]
+	return value, ok
+}
+
+func formatCount(value float64) string {
+	return fmt.Sprintf("%.0f", value)
+}
+
+func formatFloat(value float64) string {
+	if math.Abs(value) >= 1000 {
+		return fmt.Sprintf("%.0f", value)
+	}
+	if math.Abs(value) >= 100 {
+		return fmt.Sprintf("%.1f", value)
+	}
+	return fmt.Sprintf("%.2f", value)
+}
+
+func renderTable(headers []string, rows [][]string) string {
+	widths := make([]int, len(headers))
+	for i, header := range headers {
+		widths[i] = len(header)
+	}
+	for _, row := range rows {
+		for i, cell := range row {
+			if i < len(widths) && len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	writeTableRow(&buf, headers, widths)
+	separator := make([]string, len(widths))
+	for i, width := range widths {
+		separator[i] = strings.Repeat("-", width)
+	}
+	writeTableRow(&buf, separator, widths)
+	for _, row := range rows {
+		writeTableRow(&buf, row, widths)
+	}
+	return buf.String()
+}
+
+func writeTableRow(buf *bytes.Buffer, row []string, widths []int) {
+	for i := range widths {
+		cell := ""
+		if i < len(row) {
+			cell = row[i]
+		}
+		if i > 0 {
+			buf.WriteString("  ")
+		}
+		fmt.Fprintf(buf, "%-*s", widths[i], cell)
+	}
+	buf.WriteByte('\n')
+}
+
+func terminalSweepCharts(workloads []WorkloadSummary) string {
+	var buf bytes.Buffer
+	for _, workload := range workloads {
+		if len(workload.Runs) < 2 {
+			continue
+		}
+		charts := []string{
+			renderRunChart(workload.Runs, "request_throughput", "request throughput", "req/s"),
+			renderRunChart(workload.Runs, "tps", "token throughput", "tok/s"),
+			renderRunChart(workload.Runs, "latency_p90_ms", "latency p90", "ms"),
+		}
+		wroteHeader := false
+		for _, chart := range charts {
+			if chart == "" {
+				continue
+			}
+			if !wroteHeader {
+				fmt.Fprintf(&buf, "sweep graphs: %s\n", workload.ID)
+				wroteHeader = true
+			}
+			buf.WriteString(chart)
+		}
+		if wroteHeader {
+			buf.WriteByte('\n')
+		}
+	}
+	return buf.String()
+}
+
+func renderRunChart(runs []RunSummary, key string, title string, unit string) string {
+	maxValue := 0.0
+	for _, run := range runs {
+		if run.Error != "" {
+			continue
+		}
+		value, ok := metricValue(run.Metrics, key)
+		if ok && value > maxValue {
+			maxValue = value
+		}
+	}
+	if maxValue <= 0 {
+		return ""
+	}
+
+	const width = 34
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "  %s\n", title)
+	for _, run := range runs {
+		if run.Error != "" {
+			fmt.Fprintf(&buf, "    %-24s | error: %s\n", run.Name, run.Error)
+			continue
+		}
+		value, ok := metricValue(run.Metrics, key)
+		if !ok {
+			continue
+		}
+		barLen := int(math.Round((value / maxValue) * width))
+		if barLen < 1 && value > 0 {
+			barLen = 1
+		}
+		bar := strings.Repeat("#", barLen)
+		fmt.Fprintf(&buf, "    %-24s | %-34s %s %s\n", run.Name, bar, formatFloat(value), unit)
+	}
+	return buf.String()
 }
 
 func formatMetrics(metrics map[string]float64) string {

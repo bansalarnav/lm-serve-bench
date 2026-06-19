@@ -6,7 +6,7 @@ The default suite in `data/suites/default.json` is the benchmark contract. Its w
 
 The active bundled corpus lives in `data/bundled/`.
 
-`data/bundled/manifest.json` is the source contract for the shipped benchmark corpus. `lm-serve-bench validate-data` checks that every manifest source is present and renderable.
+`data/bundled/manifest.json` is the source contract for the shipped benchmark corpus.
 
 Files under `data/bundled/traces/` are the benchmark traffic inputs. When public exact traces are bundled, they are high-variance 25-minute windows selected from the upstream trace and replayed without row-count expansion. Source-shaped fixture traces are still expanded deterministically for workload families whose full upstream windows have not been imported yet.
 
@@ -29,6 +29,6 @@ Files under `data/bundled/prompts/` are compact source-shaped prompt records:
 
 The default suite intentionally keeps seven reported workload categories. RAG and agentic sessions share implementation machinery, but they stay separate because RAG mostly stresses repeated retrieved context and prefill/cache behavior, while agentic traffic stresses inter-call gaps, session retention, and cache eviction under idle periods.
 
-The `convert` command is for maintainers to refresh or inspect candidate bundled data sources. It supports production traces (`bailian`, `burstgpt`, `azure`) and prompt/task datasets (`sharegpt`, `wildchat`, `blazedit`, `swebench`, `bigcodebench`, `longbench`, `infinitebench`, `ruler`, `taubench`, `tau2`, `ragpulse`). Use `--window 25m --select high-variance` for standard source-window imports.
+The import/conversion code is only for maintainers refreshing bundled data. It supports production traces (`bailian`, `burstgpt`, `azure`) and prompt/task datasets (`sharegpt`, `wildchat`, `blazedit`, `swebench`, `bigcodebench`, `longbench`, `infinitebench`, `ruler`, `taubench`, `tau2`, `ragpulse`).
 
 Normal benchmark users should run `lm-serve-bench run` directly against an endpoint.
