@@ -1,72 +1,54 @@
 # lm-serve-bench
 
-`lm-serve-bench` prepares and runs a fixed-schedule LLM serving benchmark against an OpenAI-compatible chat completions endpoint. It uses the bundled suite definition in `data/suites/default.json`, materializes AIPerf-compatible workload directories, runs AIPerf, and writes a compact benchmark summary.
+`lm-serve-bench` runs fixed-schedule LLM serving benchmarks against an OpenAI-compatible chat completions endpoint. It materializes workloads from `data/suites/default.json`, invokes AIPerf, and writes a summary.
+
+The default suite lasts 25 minutes. Its mixed `overall` replay sends 241,351 requests.
 
 ## Workloads
-
-The default suite runs for 25 minutes unless overridden. Running every workload as the mixed `overall` replay sends 241,351 requests.
 
 | Workload | Requests | Trace source | Realistic prompt source |
 | --- | ---: | --- | --- |
 | `prod-chat` | 116,366 | [Azure LLM Inference Trace 2024](https://raw.githubusercontent.com/Azure/AzurePublicDataset/master/AzureLLMInferenceDataset2024.md) | [ShareGPT](https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered), [WildChat](https://huggingface.co/datasets/allenai/WildChat-4.8M) |
-| `prod-cache` | 11,219 | [Qwen Bailian usage traces](https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon) | Deterministic block renderer keyed by trace `hash_ids` |
+| `prod-cache` | 11,219 | [Qwen Bailian usage traces](https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon) | Deterministic renderer keyed by trace `hash_ids` |
 | `rag-cache` | 3,307 | [RAGPulse](https://github.com/flashserve/RAGPulse) | [RAGPulse](https://github.com/flashserve/RAGPulse) |
 | `code-repo` | 80,000 | [Azure LLM Inference Trace 2024](https://raw.githubusercontent.com/Azure/AzurePublicDataset/master/AzureLLMInferenceDataset2024.md) | [Blazedit](https://huggingface.co/datasets/vdaita/edit_5k_char), [SWE-bench Lite](https://huggingface.co/datasets/SWE-bench/SWE-bench_Lite), [BigCodeBench](https://huggingface.co/datasets/bigcode/bigcodebench-hard) |
-| `long-context` | 240 | Synthetic long-context arrivals | [LongBench v2](https://huggingface.co/datasets/THUDM/LongBench-v2), [InfiniteBench](https://github.com/OpenBMB/InfiniteBench), [RULER](https://github.com/NVIDIA/RULER) |
+| `long-context` | 240 | Synthetic arrivals | [LongBench v2](https://huggingface.co/datasets/THUDM/LongBench-v2), [InfiniteBench](https://github.com/OpenBMB/InfiniteBench), [RULER](https://github.com/NVIDIA/RULER) |
 | `agentic-tools` | 20,219 | [tau2-bench](https://github.com/sierra-research/tau2-bench) | [tau-bench](https://github.com/sierra-research/tau-bench), [tau2-bench](https://github.com/sierra-research/tau2-bench) |
 | `cache-control` | 10,000 | Synthetic phased arrivals | Synthetic prefix generator |
 
-The default replay, load sweep, and RPS sweep pass `trace.jsonl` to AIPerf as `mooncake_trace`. Those rows usually contain timestamps, `input_length`, and optional `hash_ids`, not full prompt text. The realistic prompt sources are rendered into `pool.jsonl`, which is used by the closed-loop throughput sweep.
+## Workload Notes
 
-## Workload Descriptions
+- `prod-chat`: bursty production-style chat traffic with varied input lengths.
+- `prod-cache`: production cache traces for prefix reuse, eviction, and memory-pressure behavior.
+- `rag-cache`: RAG requests with repeated system prompts, retrieved context, history, and questions.
+- `code-repo`: code generation, editing, and repository issue tasks.
+- `long-context`: 32k-plus-token prompts that stress prefill and KV memory.
+- `agentic-tools`: timed, multi-turn tool-use sessions with idle gaps.
+- `cache-control`: deterministic high-sharing and low-sharing cache baselines.
 
-`prod-chat` represents bursty production chat traffic. Its default replay uses real arrival timing and input-length variation, while its throughput sweep can draw from rendered chat prompts. It is mainly useful for measuring queueing behavior, autoscaling behavior, TTFT, TPOT, and goodput under normal assistant-style traffic.
+## Trace And Prompt Derivation
 
-`prod-cache` focuses on production prefix-cache behavior. It preserves Qwen Bailian cache block `hash_ids`, so the replay can exercise repeated prefixes, cache hits, cache eviction, memory pressure, and the latency impact of cache reuse.
+Each workload becomes `trace.jsonl`, `pool.jsonl`, `workload.json`, `aiperf.yaml`, and runnable scripts in the output directory.
 
-`rag-cache` models retrieval-augmented generation sessions. Requests include repeated system prompts, retrieved context, conversation history, and user questions, which makes it useful for measuring prefix/KV retention, RAG context prefill cost, and cache behavior across repeated components.
+- `prod-chat` preserves an Azure 25-minute trace window's timestamps and input lengths. ShareGPT and WildChat records fill the prompt pool. No hashes are added.
+- `prod-cache` preserves the Qwen trace's timestamps, lengths, and cache-block `hash_ids`, including IDs such as `1089`, `1090`, and `1091`. Those IDs also key the deterministic prompt renderer.
+- `rag-cache` preserves a high-variance 25-minute RAGPulse window, including component hashes for system prompts, passages, history, web search, and user input.
+- `code-repo` selects a high-variance Azure window, downsamples it to 80,000 requests, and builds a code prompt pool. No hashes are added.
+- `long-context` repeats four synthetic trace rows to 240 requests and scales them to the chosen duration. The prompt pool is padded to the requested approximate input lengths. No hashes are added.
+- `agentic-tools` converts timed tau2 assistant calls, repeats their cadence to fill the benchmark duration, and derives hashes from source files and tool names for calls with tools.
+- `cache-control` generates timestamps, lengths, and deterministic hashes. Even requests reuse shared prefix IDs such as `8001`, `8002`, and `8003`; the others use unique IDs.
 
-`code-repo` covers code generation, code editing, and repository issue-solving prompts. It stresses longer prefill, larger prompt bodies, decode throughput, and latency for code-heavy workloads.
+Default replay, load sweeps, and RPS sweeps give AIPerf `trace.jsonl` as `mooncake_trace`: timestamps, `input_length`, and optional `hash_ids`, rather than full prompt text. `pool.jsonl` contains the realistic rendered prompts and is used only by the closed-loop throughput sweep.
 
-`long-context` stresses prefill and KV memory with prompts at roughly 32k tokens and above. It is intentionally much smaller by request count because each request is large.
+With `--workload all` and no sweep, all traces are rescaled to one duration, tagged with `_workload`, sorted by timestamp, and replayed as `overall`.
 
-`agentic-tools` represents multi-turn tool-use sessions. It replays real timed tau2 assistant LLM calls with prompt-token lengths and tool-call markers, which makes it useful for testing KV retention, cache eviction, session latency, and autoscaling under idle gaps.
+## Running A Benchmark
 
-`cache-control` is a deterministic calibration workload. It creates high-cache-sharing and low-cache-sharing request patterns so cache behavior can be compared against a controlled best-case/worst-case style baseline.
-
-## Trace Derivation
-
-Each workload is materialized into `trace.jsonl`, `pool.jsonl`, `workload.json`, `aiperf.yaml`, and runnable shell scripts under the output directory.
-
-`prod-chat` uses a bundled Azure trace file with 116,366 rows. The materializer keeps the selected source-window timestamps and input lengths, then renders chat prompts from the bundled ShareGPT/WildChat records into the request pool. It does not add `hash_ids`.
-
-`prod-cache` uses a bundled Qwen Bailian trace file with 11,219 rows. The replay preserves timestamps, input lengths, and source cache block `hash_ids`; those IDs are also what make repeated prefix blocks repeat in the rendered prompt text. Example hash IDs include `1089`, `1090`, `1091`, and longer per-block IDs from the bundled trace.
-
-`rag-cache` uses a 3,307-row, high-variance 25-minute window selected from the seven-day RAGPulse trace. The converter preserves the window's upstream timing, input lengths, and component `hash_ids` from system prompt, passages, history, web-search, and user-input fields. It does not scale or repeat rows.
-
-`code-repo` uses a bundled Azure code trace file with 131,765 rows. The materializer selects the high-variance 25-minute source window, downsamples it to 80,000 requests, and renders code prompts from SWE-bench, BigCodeBench, and Blazedit records. It does not add `hash_ids`.
-
-`long-context` starts from 4 bundled synthetic long-context trace rows and 4 prompt records. It repeats the rows to 240 requests, scales them across the workload duration, and pads rendered long-context prompts to the requested approximate input lengths. It does not add `hash_ids`.
-
-`agentic-tools` starts with 7,087 assistant LLM-call rows converted from tau2 airline and retail result files. Rows come from upstream assistant turns that include a timestamp and `usage.prompt_tokens`; `hash_ids` are derived from the upstream source file and tool-call names when a turn contains tool calls. The source run lasts 9m10s, so materialization repeats its original cadence until the 25-minute benchmark window ends, producing 20,219 requests.
-
-`cache-control` is generated deterministically when no bundled trace exists. It creates synthetic timestamps, input lengths, and cache-sharing `hash_ids`; even-numbered requests reuse shared prefix IDs such as `8001`, `8002`, and `8003`, while other requests use unique suffix-style IDs.
-
-When `--workload all` is used without a sweep, the benchmark creates an `overall` mixed replay. It rescales every materialized workload trace to the same replay duration, tags each row with `_workload`, sorts all rows by timestamp, and runs that single interleaved trace.
-
-## What Happens When You Run It
-
-1. `lm-serve-bench run` loads the suite JSON from `--suite`, defaulting to `data/suites/default.json`.
-2. It materializes every suite workload into `--out`, defaulting to `out/default`.
-3. Materialization writes `workload.json`, `trace.jsonl`, `pool.jsonl`, `aiperf.yaml`, `run.sh`, `sweep-load.sh`, and `sweep-throughput.sh` for each workload. Load sweep trace files are precomputed from the base trace.
-4. If `--workload all` and no sweep are selected, it creates `overall/trace.jsonl` by interleaving all workload traces and runs only `overall/run.sh`.
-5. If a single workload is selected, it runs that workload's script. If `--workload all` is used with a sweep, it runs the chosen sweep script once per workload.
-6. The script invokes `${AIPERF_BIN:-aiperf} profile` with chat streaming enabled, `temperature:0`, the configured model, and the configured endpoint.
-7. AIPerf writes its artifacts under each workload's artifact directory.
-8. `lm-serve-bench` scans for AIPerf JSON exports, computes request counts, throughput, token throughput, TTFT, latency, TPOT, and sequence-length summaries, then writes `summary.json` and `summary.md`.
-9. A terminal summary is printed after successful non-dry-run execution.
-
-## Usage
+1. Load the suite and materialize every workload under `--out` (default: `out/default`).
+2. Build the mixed `overall` trace, or select one workload or sweep script.
+3. Run `${AIPERF_BIN:-aiperf} profile` with streaming enabled, `temperature:0`, the chosen model, and endpoint.
+4. AIPerf writes its artifacts under the workload artifact directory.
+5. The benchmark reads AIPerf JSON exports and writes `summary.json` and `summary.md`.
 
 ```sh
 go run ./cmd/lm-serve-bench run \
@@ -74,52 +56,42 @@ go run ./cmd/lm-serve-bench run \
   --model Qwen/Qwen3-0.6B
 ```
 
-Run one workload:
-
 ```sh
+# One workload
 go run ./cmd/lm-serve-bench run --workload code-repo
-```
 
-Print the generated scripts without running AIPerf:
-
-```sh
+# Generate files and scripts without running AIPerf
 go run ./cmd/lm-serve-bench run --dry-run
-```
 
-Start the built-in OpenAI-compatible mock endpoint:
-
-```sh
+# Built-in OpenAI-compatible mock endpoint
 go run ./cmd/lm-serve-bench mock-server --addr 127.0.0.1:8000
 ```
 
-The mock server implements `/v1/chat/completions` and `/health`. It supports streaming and a configurable streamed token delay with `--token-delay`.
+## Reported Statistics
+
+`summary.json` and `summary.md` contain per-run, per-workload, and overall results. The terminal summary shows completed workloads/runs, total requests, request throughput, output token throughput, and p90 TTFT, request latency, and TPOT.
+
+When AIPerf provides the data, the summary also includes:
+
+- Request count, request throughput, output token count, and output token throughput (`tps`).
+- TTFT, request latency, and TPOT in milliseconds: average, min, max, p1, p5, p10, p25, p50, p75, p90, p95, p99, and standard deviation.
+- Input and output sequence lengths: average, p50, p95, and p99.
+- Result-file paths and an error/status for unavailable or unreadable runs.
+
+For multiple runs, request and token throughputs are summed; latency distribution values are averaged across the successful runs. The `overall` replay also derives a workload breakdown from AIPerf request records when those records are available.
 
 ## Features
 
-- Fixed-schedule trace replay through AIPerf's `mooncake_trace` input format.
-- Mixed `overall` replay that interleaves all default workloads into one benchmark run.
-- Single-workload execution with `--workload <id>`.
-- Custom suite path with `--suite`.
-- Custom output directory with `--out`.
-- Custom model name with `--model`.
-- Custom OpenAI-compatible endpoint with `--endpoint`.
-- Duration override for default trace replay with `--duration`, for example `--duration 10m` or `--duration 90s`.
-- Dry runs with `--dry-run`.
-- Load sweeps with `--sweep load`, using multipliers `0.25x`, `0.50x`, `1.00x`, `2.00x`, `4.00x`, and `8.00x`.
-- Throughput sweeps with `--sweep throughput`, using closed-loop concurrency levels `1`, `2`, `4`, `8`, `16`, `32`, `64`, `128`, and `256`.
-- RPS/QPS ramps with `--sweep rps --target-rps <n> --ramp-steps <n>`. `--target-qps` is accepted as an alias for `--target-rps`.
-- Random-pool throughput mode through generated `pool.jsonl` files.
-- Cache-aware traces with preserved upstream `hash_ids` where available and source-derived `hash_ids` for tau2 tool-call turns.
-- Long-context prompt padding for long-context workloads.
-- Generated `aiperf.yaml` files for direct AIPerf use.
-- Generated runnable shell scripts for default replay and sweeps.
-- AIPerf binary override with `AIPERF_BIN`.
-- Artifact directory override with `ARTIFACT_DIR`.
-- Docker image support; the Dockerfile builds the Go binary and installs `aiperf`.
+- Fixed-schedule replay and a mixed `overall` replay.
+- Run a single workload with `--workload <id>`.
+- Override suite, output directory, model, endpoint, and replay duration with `--suite`, `--out`, `--model`, `--endpoint`, and `--duration`.
+- Use `--dry-run` to generate the benchmark without invoking AIPerf.
+- Load sweep: `--sweep load` with `0.25x`, `0.50x`, `1x`, `2x`, `4x`, and `8x` trace multipliers.
+- Throughput sweep: `--sweep throughput` with closed-loop concurrency from 1 to 256 and the realistic prompt pool.
+- RPS ramp: `--sweep rps --target-rps <n> --ramp-steps <n>`; `--target-qps` is an alias.
+- Preserved or generated cache hashes, long-context prompt padding, generated AIPerf YAML and scripts, `AIPERF_BIN` and `ARTIFACT_DIR` overrides, and Docker support.
 
-## Outputs
-
-For the default output directory, expect:
+## Output Layout
 
 ```text
 out/default/
@@ -134,8 +106,7 @@ out/default/
     run.sh
     sweep-load.sh
     sweep-throughput.sh
-    trace-load-*.jsonl
     artifacts/
 ```
 
-RPS sweeps also generate `sweep-rps.sh` and `trace-rps-*.jsonl` at run time.
+RPS sweeps create `sweep-rps.sh` and `trace-rps-*.jsonl` when run.
