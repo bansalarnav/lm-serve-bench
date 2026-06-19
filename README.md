@@ -4,21 +4,23 @@
 
 ## Workloads
 
-The default suite runs for 25 minutes unless overridden. Running every workload as the mixed `overall` replay sends 241,825 requests.
+The default suite runs for 25 minutes unless overridden. Running every workload as the mixed `overall` replay sends 241,351 requests.
 
 | Workload | Requests | Trace source | Realistic prompt source |
 | --- | ---: | --- | --- |
 | `prod-chat` | 116,366 | [Azure LLM Inference Trace 2024](https://raw.githubusercontent.com/Azure/AzurePublicDataset/master/AzureLLMInferenceDataset2024.md) | [ShareGPT](https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered), [WildChat](https://huggingface.co/datasets/allenai/WildChat-4.8M) |
 | `prod-cache` | 11,219 | [Qwen Bailian usage traces](https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon) | Deterministic block renderer keyed by trace `hash_ids` |
-| `rag-cache` | 8,000 | [RAGPulse](https://github.com/flashserve/RAGPulse) | [RAGPulse](https://github.com/flashserve/RAGPulse) |
+| `rag-cache` | 3,307 | [RAGPulse](https://github.com/flashserve/RAGPulse) | [RAGPulse](https://github.com/flashserve/RAGPulse) |
 | `code-repo` | 80,000 | [Azure LLM Inference Trace 2024](https://raw.githubusercontent.com/Azure/AzurePublicDataset/master/AzureLLMInferenceDataset2024.md) | [Blazedit](https://huggingface.co/datasets/vdaita/edit_5k_char), [SWE-bench Lite](https://huggingface.co/datasets/SWE-bench/SWE-bench_Lite), [BigCodeBench](https://huggingface.co/datasets/bigcode/bigcodebench-hard) |
 | `long-context` | 240 | Synthetic long-context arrivals | [LongBench v2](https://huggingface.co/datasets/THUDM/LongBench-v2), [InfiniteBench](https://github.com/OpenBMB/InfiniteBench), [RULER](https://github.com/NVIDIA/RULER) |
-| `agentic-tools` | 16,000 | [tau2-bench](https://github.com/sierra-research/tau2-bench), [tau-bench historical trajectories](https://github.com/sierra-research/tau-bench) | [tau-bench](https://github.com/sierra-research/tau-bench), [tau2-bench](https://github.com/sierra-research/tau2-bench) |
+| `agentic-tools` | 20,219 | [tau2-bench](https://github.com/sierra-research/tau2-bench) | [tau-bench](https://github.com/sierra-research/tau-bench), [tau2-bench](https://github.com/sierra-research/tau2-bench) |
 | `cache-control` | 10,000 | Synthetic phased arrivals | Synthetic prefix generator |
+
+The default replay, load sweep, and RPS sweep pass `trace.jsonl` to AIPerf as `mooncake_trace`. Those rows usually contain timestamps, `input_length`, and optional `hash_ids`, not full prompt text. The realistic prompt sources are rendered into `pool.jsonl`, which is used by the closed-loop throughput sweep.
 
 ## Workload Descriptions
 
-`prod-chat` represents bursty production chat traffic. It combines real arrival timing and input-length variation with rendered chat prompts, and is mainly useful for measuring queueing behavior, autoscaling behavior, TTFT, TPOT, and goodput under normal assistant-style traffic.
+`prod-chat` represents bursty production chat traffic. Its default replay uses real arrival timing and input-length variation, while its throughput sweep can draw from rendered chat prompts. It is mainly useful for measuring queueing behavior, autoscaling behavior, TTFT, TPOT, and goodput under normal assistant-style traffic.
 
 `prod-cache` focuses on production prefix-cache behavior. It preserves Qwen Bailian cache block `hash_ids`, so the replay can exercise repeated prefixes, cache hits, cache eviction, memory pressure, and the latency impact of cache reuse.
 
@@ -28,7 +30,7 @@ The default suite runs for 25 minutes unless overridden. Running every workload 
 
 `long-context` stresses prefill and KV memory with prompts at roughly 32k tokens and above. It is intentionally much smaller by request count because each request is large.
 
-`agentic-tools` represents multi-turn tool-use sessions. It replays tool-agent style calls separated by client-side gaps and repeated state/tool/task context, which makes it useful for testing KV retention, cache eviction, session latency, and autoscaling under idle gaps.
+`agentic-tools` represents multi-turn tool-use sessions. It replays real timed tau2 assistant LLM calls with prompt-token lengths and tool-call markers, which makes it useful for testing KV retention, cache eviction, session latency, and autoscaling under idle gaps.
 
 `cache-control` is a deterministic calibration workload. It creates high-cache-sharing and low-cache-sharing request patterns so cache behavior can be compared against a controlled best-case/worst-case style baseline.
 
@@ -40,13 +42,13 @@ Each workload is materialized into `trace.jsonl`, `pool.jsonl`, `workload.json`,
 
 `prod-cache` uses a bundled Qwen Bailian trace file with 11,219 rows. The replay preserves timestamps, input lengths, and source cache block `hash_ids`; those IDs are also what make repeated prefix blocks repeat in the rendered prompt text. Example hash IDs include `1089`, `1090`, `1091`, and longer per-block IDs from the bundled trace.
 
-`rag-cache` starts from 6 bundled RAGPulse trace rows and 3 bundled prompt records. The trace is repeated until it reaches 8,000 requests, then scaled across the workload duration. Its `hash_ids` are derived during materialization from prompt components: `rag:system`, `rag:retrieved`, `rag:history`, and `rag:question`. The stable ID algorithm is FNV-1a over the component namespace plus trimmed component text. Example derived IDs include `420860683`, `530162297`, `157273401`, and `1321135449`.
+`rag-cache` uses a 3,307-row, high-variance 25-minute window selected from the seven-day RAGPulse trace. The converter preserves the window's upstream timing, input lengths, and component `hash_ids` from system prompt, passages, history, web-search, and user-input fields. It does not scale or repeat rows.
 
 `code-repo` uses a bundled Azure code trace file with 131,765 rows. The materializer selects the high-variance 25-minute source window, downsamples it to 80,000 requests, and renders code prompts from SWE-bench, BigCodeBench, and Blazedit records. It does not add `hash_ids`.
 
 `long-context` starts from 4 bundled synthetic long-context trace rows and 4 prompt records. It repeats the rows to 240 requests, scales them across the workload duration, and pads rendered long-context prompts to the requested approximate input lengths. It does not add `hash_ids`.
 
-`agentic-tools` starts from 6 bundled tau-bench/tau2 trace rows and 3 bundled prompt records. The trace is repeated to 16,000 requests and scaled across the workload duration. Its `hash_ids` are derived from `agentic:task`, `agentic:tools`, and `agentic:state` prompt components with the same stable FNV-1a hash function. Example derived IDs include `1909052184`, `2039932256`, and `850464974`.
+`agentic-tools` starts with 7,087 assistant LLM-call rows converted from tau2 airline and retail result files. Rows come from upstream assistant turns that include a timestamp and `usage.prompt_tokens`; `hash_ids` are derived from the upstream source file and tool-call names when a turn contains tool calls. The source run lasts 9m10s, so materialization repeats its original cadence until the 25-minute benchmark window ends, producing 20,219 requests.
 
 `cache-control` is generated deterministically when no bundled trace exists. It creates synthetic timestamps, input lengths, and cache-sharing `hash_ids`; even-numbered requests reuse shared prefix IDs such as `8001`, `8002`, and `8003`, while other requests use unique suffix-style IDs.
 
@@ -107,7 +109,7 @@ The mock server implements `/v1/chat/completions` and `/health`. It supports str
 - Throughput sweeps with `--sweep throughput`, using closed-loop concurrency levels `1`, `2`, `4`, `8`, `16`, `32`, `64`, `128`, and `256`.
 - RPS/QPS ramps with `--sweep rps --target-rps <n> --ramp-steps <n>`. `--target-qps` is accepted as an alias for `--target-rps`.
 - Random-pool throughput mode through generated `pool.jsonl` files.
-- Cache-aware traces with preserved or derived `hash_ids`.
+- Cache-aware traces with preserved upstream `hash_ids` where available and source-derived `hash_ids` for tau2 tool-call turns.
 - Long-context prompt padding for long-context workloads.
 - Generated `aiperf.yaml` files for direct AIPerf use.
 - Generated runnable shell scripts for default replay and sweeps.

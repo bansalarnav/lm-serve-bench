@@ -8,14 +8,14 @@ The active bundled corpus lives in `data/bundled/`.
 
 `data/bundled/manifest.json` is the source contract for the shipped benchmark corpus.
 
-Files under `data/bundled/traces/` are the benchmark traffic inputs. When public exact traces are bundled, they are high-variance 25-minute windows selected from the upstream trace and replayed without row-count expansion. Source-shaped fixture traces are still expanded deterministically for workload families whose full upstream windows have not been imported yet.
+Files under `data/bundled/traces/` are the benchmark traffic inputs. When public exact traces are bundled, they are replayed without row-count expansion. Synthetic/control traces are explicitly labeled as synthetic.
 
 - `prod-chat.jsonl`: high-variance Azure conversation trace window.
 - `prod-cache.jsonl`: high-variance Qwen Bailian prefix-cache trace window with repeated block hashes.
-- `rag-cache.jsonl`: RAGPulse-style component/session arrivals.
+- `rag-cache.jsonl`: real RAGPulse component/session rows from a high-variance 25-minute source window, with upstream timestamps, input lengths, and component hash IDs.
 - `code-repo.jsonl`: high-variance Azure code trace window.
 - `long-context.jsonl`: synthetic long-context arrivals at 32k tokens and above.
-- `agentic-tools.jsonl`: tau-bench/tau2-style session gaps. Cache component hashes are derived from bundled prompt records during materialization.
+- `agentic-tools.jsonl`: one real 9m10s tau2 timed assistant LLM-call run derived from airline and retail result files; it is repeated on its original cadence to fill the default window.
 
 Files under `data/bundled/prompts/` are compact source-shaped prompt records:
 

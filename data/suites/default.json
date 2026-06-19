@@ -98,11 +98,14 @@
       "pairing": "preserve_component_hashes",
       "metrics_focus": ["prefix-cache-hit-rate", "kv-retention", "ttft", "rag-context-prefill"],
       "max_output_tokens": 192,
-      "default_requests": 8000,
+      "default_requests": 3307,
       "phase": {
         "type": "fixed_schedule",
         "duration_seconds": 1500,
-        "warmup_requests": 250
+        "warmup_requests": 250,
+        "trace_mode": "source_window",
+        "window_seconds": 1500,
+        "selection": "high-variance"
       }
     },
     {
@@ -190,17 +193,12 @@
       "id": "agentic-tools",
       "name": "Tool-heavy agent sessions",
       "category": "agentic",
-      "description": "Multi-turn tool-use sessions replayed as LLM calls separated by client-side tool delays.",
+      "description": "Multi-turn tool-use sessions replayed from timed tau2 assistant LLM calls with tool-call markers.",
       "traffic_sources": [
         {
           "name": "tau2-bench",
           "url": "https://github.com/sierra-research/tau2-bench",
-          "notes": "Customer-service agent tasks across domains with tool interactions."
-        },
-        {
-          "name": "tau-bench historical trajectories",
-          "url": "https://github.com/sierra-research/tau-bench",
-          "notes": "Retail and airline trajectories for tool-using agents."
+          "notes": "Timed airline and retail result traces with assistant turns, prompt-token usage, and tool interactions."
         }
       ],
       "prompt_sources": [
@@ -218,11 +216,12 @@
       "pairing": "session_replay_with_client_delays",
       "metrics_focus": ["kv-retention", "cache-eviction", "session-latency", "autoscaling-under-idle-gaps"],
       "max_output_tokens": 256,
-      "default_requests": 16000,
+      "default_requests": 20219,
       "phase": {
         "type": "fixed_schedule",
         "duration_seconds": 1500,
-        "warmup_requests": 250
+        "warmup_requests": 250,
+        "trace_mode": "repeat_to_duration"
       }
     },
     {

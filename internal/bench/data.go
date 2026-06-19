@@ -111,7 +111,7 @@ func traceDefaultSource(workloadID string) string {
 	case "long-context":
 		return "synthetic-long-context"
 	case "agentic-tools":
-		return "taubench"
+		return "tau2"
 	default:
 		return "synthetic"
 	}

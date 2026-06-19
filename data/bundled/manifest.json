@@ -21,7 +21,7 @@
       "kind": "trace",
       "workload": "rag-cache",
       "file": "data/bundled/traces/rag-cache.jsonl",
-      "notes": "RAG component/session arrival shape. Cache component hash ids are derived from bundled prompt records during materialization."
+      "notes": "3,307 real RAGPulse rows from the highest-variance 25-minute window in data/0_trace.jsonl; upstream timestamps, input lengths, and component hash ids are preserved."
     },
     {
       "id": "ragpulse",
@@ -91,14 +91,14 @@
       "kind": "trace",
       "workload": "agentic-tools",
       "file": "data/bundled/traces/agentic-tools.jsonl",
-      "notes": "Agent session gaps. Cache component hash ids are derived from bundled prompt records during materialization."
+      "notes": "Not used for the bundled trace because public tau-bench historical trajectories do not include wall-clock timing."
     },
     {
       "id": "tau2",
       "kind": "trace",
       "workload": "agentic-tools",
       "file": "data/bundled/traces/agentic-tools.jsonl",
-      "notes": "Agent session gaps. Cache component hash ids are derived from bundled prompt records during materialization."
+      "notes": "7,087 real assistant LLM-call rows converted from tau2 airline and retail result files; each row has upstream timestamp and usage.prompt_tokens. Materialization repeats the 9m10s source cadence to fill the default 25-minute run."
     },
     {
       "id": "taubench",

@@ -131,6 +131,61 @@ func padPromptToApproxTokens(prompt string, targetTokens int) string {
 	return b.String()
 }
 
+func expandLongContextPrompt(prompt string, targetTokens int, index int) string {
+	if targetTokens <= 0 {
+		return prompt
+	}
+	current := approximateTokenCount(prompt)
+	if current >= targetTokens {
+		return prompt
+	}
+
+	excerpts := longContextExcerpts(prompt)
+	if len(excerpts) == 0 {
+		excerpts = []string{prompt}
+	}
+
+	var b strings.Builder
+	b.WriteString(prompt)
+	section := 1
+	for current < targetTokens {
+		excerpt := excerpts[(index+section)%len(excerpts)]
+		fmt.Fprintf(&b, "\n\nDocument shard %04d.%02d\n", index%997, section)
+		fmt.Fprintf(&b, "Manifest: tenant=%03d generation=%05d source=%s\n", index%37, 10000+section, longContextSourceName(index, section))
+		fmt.Fprintf(&b, "Excerpt:\n%s\n", excerpt)
+		fmt.Fprintf(&b, "Operational notes: preserve entity names, timestamps, causal order, and exception clauses from this shard when answering. Cross-reference earlier shards before choosing a final answer.\n")
+		current = approximateTokenCount(b.String())
+		section++
+	}
+	return b.String()
+}
+
+func longContextExcerpts(prompt string) []string {
+	fields := strings.Fields(prompt)
+	if len(fields) == 0 {
+		return nil
+	}
+	const window = 96
+	const step = 64
+	var excerpts []string
+	for start := 0; start < len(fields); start += step {
+		end := start + window
+		if end > len(fields) {
+			end = len(fields)
+		}
+		excerpts = append(excerpts, strings.Join(fields[start:end], " "))
+		if end == len(fields) {
+			break
+		}
+	}
+	return excerpts
+}
+
+func longContextSourceName(index int, section int) string {
+	names := []string{"runbook", "transcript", "repository-map", "policy-archive", "incident-log", "design-note"}
+	return names[(index+section)%len(names)]
+}
+
 func writeOrCopyPool(path string, workload Workload) error {
 	prompts, err := workloadPrompts(workload)
 	if err != nil {
@@ -150,7 +205,7 @@ func writeOrCopyPool(path string, workload Workload) error {
 	for i := 0; i < max(1, workload.DefaultRequests); i++ {
 		text := prompts[i%len(prompts)]
 		if workload.Category == "long-context" {
-			text = padPromptToApproxTokens(text, syntheticInputLength(i, workload.Category))
+			text = expandLongContextPrompt(text, syntheticInputLength(i, workload.Category), i)
 		}
 		entry := map[string]any{
 			"text":          text,
@@ -243,9 +298,6 @@ func writeExpandedBundledTrace(path string, sourcePath string, workload Workload
 	if len(entries) == 0 {
 		return fmt.Errorf("bundled trace %s has no rows", sourcePath)
 	}
-	if err := applyDerivedHashIDs(entries, workload); err != nil {
-		return err
-	}
 	if workload.Phase.TraceMode == "source_window" {
 		if workload.Phase.WindowSeconds > 0 {
 			entries = selectTraceWindow(entries, workload.Phase.WindowSeconds*1000, workload.Phase.Selection)
@@ -258,30 +310,142 @@ func writeExpandedBundledTrace(path string, sourcePath string, workload Workload
 		}
 		return writeTraceEntries(path, entries)
 	}
+	if workload.Phase.TraceMode == "repeat_to_duration" {
+		entries = repeatTraceToDuration(entries, workload.Phase.DurationSeconds)
+		if err := applyDerivedHashIDs(entries, workload); err != nil {
+			return err
+		}
+		return writeTraceEntries(path, entries)
+	}
 
 	target := workload.DefaultRequests
 	if target <= 0 {
 		target = len(entries)
 	}
 	if len(entries) >= target {
-		return writeTraceEntries(path, entries[:target])
+		selected := append([]AIPerfTraceEntry(nil), entries[:target]...)
+		if err := applyDerivedHashIDs(selected, workload); err != nil {
+			return err
+		}
+		scaleEntriesToDuration(selected, workload.Phase.DurationSeconds)
+		return writeTraceEntries(path, selected)
 	}
 
-	period := bundledTracePeriod(entries, workload)
-	expanded := make([]AIPerfTraceEntry, 0, target)
-	for len(expanded) < target {
-		cycle := len(expanded) / len(entries)
-		for _, entry := range entries {
-			if len(expanded) >= target {
-				break
-			}
-			next := entry
-			next.Timestamp = entry.Timestamp + cycle*period
-			expanded = append(expanded, next)
-		}
+	if !canExpandBundledTrace(entries, workload) {
+		return fmt.Errorf("bundled trace %s has %d rows, but workload %s requests %d; refusing to synthesize more rows for a real-source trace", sourcePath, len(entries), workload.ID, target)
+	}
+	expanded := expandFixtureTrace(entries, workload, target)
+	if err := applyDerivedHashIDs(expanded, workload); err != nil {
+		return err
 	}
 	scaleEntriesToDuration(expanded, workload.Phase.DurationSeconds)
 	return writeTraceEntries(path, expanded)
+}
+
+func repeatTraceToDuration(entries []AIPerfTraceEntry, durationSeconds int) []AIPerfTraceEntry {
+	if len(entries) == 0 || durationSeconds <= 0 {
+		return entries
+	}
+
+	// The next copy starts one millisecond after the source trace's final
+	// request, so each repetition retains the original trace duration.
+	period := entries[len(entries)-1].Timestamp + 1
+	if period <= 0 {
+		period = 1
+	}
+	limit := durationSeconds * 1000
+	var repeated []AIPerfTraceEntry
+	for offset := 0; offset <= limit; offset += period {
+		for _, entry := range entries {
+			entry.Timestamp += offset
+			if entry.Timestamp > limit {
+				return repeated
+			}
+			repeated = append(repeated, entry)
+		}
+	}
+	return repeated
+}
+
+func canExpandBundledTrace(entries []AIPerfTraceEntry, workload Workload) bool {
+	if workload.Category == "synthetic-control" {
+		return true
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Source, "synthetic-") {
+			return false
+		}
+	}
+	return true
+}
+
+func expandFixtureTrace(templates []AIPerfTraceEntry, workload Workload, target int) []AIPerfTraceEntry {
+	duration := workload.Phase.DurationSeconds
+	if duration <= 0 {
+		duration = 1500
+	}
+
+	expanded := make([]AIPerfTraceEntry, 0, target)
+	for i := 0; i < target; i++ {
+		template := templates[i%len(templates)]
+		entry := AIPerfTraceEntry{
+			Source:      template.Source,
+			Timestamp:   fixtureTimestampMillis(i, target, duration, workload.Category),
+			InputLength: fixtureInputLength(template.InputLength, i, workload.Category),
+		}
+		expanded = append(expanded, entry)
+	}
+	sort.SliceStable(expanded, func(i, j int) bool {
+		return expanded[i].Timestamp < expanded[j].Timestamp
+	})
+	return expanded
+}
+
+func fixtureTimestampMillis(index int, count int, durationSeconds int, category string) int {
+	if count <= 1 {
+		return 0
+	}
+	durationMillis := durationSeconds * 1000
+	base := index * durationMillis / count
+
+	switch category {
+	case "rag":
+		session := index / 5
+		turn := index % 5
+		return (session*durationMillis/count*5 + turn*(350+(session%4)*140)) % durationMillis
+	case "agentic":
+		session := index / 6
+		turn := index % 6
+		toolDelay := []int{0, 900, 2400, 5200, 11000, 18000}[turn]
+		return (session*durationMillis/count*6 + toolDelay + (session%9)*120) % durationMillis
+	case "long-context":
+		burst := index % 12
+		if burst < 3 {
+			return base + burst*400
+		}
+		return base
+	default:
+		return syntheticTimestampMillis(index, count, durationSeconds, category)
+	}
+}
+
+func fixtureInputLength(templateLength int, index int, category string) int {
+	if templateLength <= 0 {
+		templateLength = syntheticInputLength(index, category)
+	}
+	switch category {
+	case "rag":
+		scale := []int{82, 94, 100, 113, 128, 146, 171}[index%7]
+		return max(512, templateLength*scale/100)
+	case "agentic":
+		scale := []int{75, 90, 100, 125, 160, 210}[index%6]
+		return max(384, templateLength*scale/100)
+	case "long-context":
+		return []int{32000, 36000, 40000, 48000, 56000, 64000}[index%6]
+	default:
+		jitter := ((index*37)%21 - 10) * templateLength / 100
+		return max(1, templateLength+jitter)
+	}
 }
 
 func applyDerivedHashIDs(entries []AIPerfTraceEntry, workload Workload) error {
@@ -289,17 +453,7 @@ func applyDerivedHashIDs(entries []AIPerfTraceEntry, workload Workload) error {
 		return nil
 	}
 
-	path := filepath.Join(bundledPromptDir, workload.ID+".jsonl")
-	file, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	defer file.Close()
-
-	records, err := readJSONRecords(file, 0)
+	records, err := workloadPromptRecords(workload)
 	if err != nil {
 		return err
 	}
@@ -308,9 +462,25 @@ func applyDerivedHashIDs(entries []AIPerfTraceEntry, workload Workload) error {
 	}
 
 	for i := range entries {
+		if len(entries[i].HashIDs) > 0 {
+			continue
+		}
 		entries[i].HashIDs = componentHashIDs(records[i%len(records)], workload.Category)
 	}
 	return nil
+}
+
+func workloadPromptRecords(workload Workload) ([]map[string]any, error) {
+	path := filepath.Join(bundledPromptDir, workload.ID+".jsonl")
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+	return readJSONRecords(file, 0)
 }
 
 func componentHashIDs(record map[string]any, category string) []int {
