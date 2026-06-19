@@ -59,7 +59,7 @@ func corpusInfo(workload Workload) CorpusInfo {
 	case "prod-cache":
 		return CorpusInfo{
 			Mode:  "deterministic_generated_trace",
-			Notes: "Uses generated cache-block hashes to preserve exact prefix reuse behavior.",
+			Notes: "Fallback generated cache-block trace; bundled prod-cache data should normally preserve source trace hashes.",
 		}
 	case "cache-control":
 		return CorpusInfo{

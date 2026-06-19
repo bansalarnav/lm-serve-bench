@@ -21,7 +21,7 @@
       "kind": "trace",
       "workload": "rag-cache",
       "file": "data/bundled/traces/rag-cache.jsonl",
-      "notes": "RAG component/session arrival shape."
+      "notes": "RAG component/session arrival shape. Cache component hash ids are derived from bundled prompt records during materialization."
     },
     {
       "id": "ragpulse",
@@ -91,14 +91,14 @@
       "kind": "trace",
       "workload": "agentic-tools",
       "file": "data/bundled/traces/agentic-tools.jsonl",
-      "notes": "Agent session gaps and repeated session hashes."
+      "notes": "Agent session gaps. Cache component hash ids are derived from bundled prompt records during materialization."
     },
     {
       "id": "tau2",
       "kind": "trace",
       "workload": "agentic-tools",
       "file": "data/bundled/traces/agentic-tools.jsonl",
-      "notes": "Agent session gaps and repeated session hashes."
+      "notes": "Agent session gaps. Cache component hash ids are derived from bundled prompt records during materialization."
     },
     {
       "id": "taubench",

@@ -15,7 +15,7 @@ Files under `data/bundled/traces/` are the benchmark traffic inputs. When public
 - `rag-cache.jsonl`: RAGPulse-style component/session arrivals.
 - `code-repo.jsonl`: high-variance Azure code trace window.
 - `long-context.jsonl`: synthetic long-context arrivals at 32k tokens and above.
-- `agentic-tools.jsonl`: tau-bench/tau2-style session gaps and repeated session hashes.
+- `agentic-tools.jsonl`: tau-bench/tau2-style session gaps. Cache component hashes are derived from bundled prompt records during materialization.
 
 Files under `data/bundled/prompts/` are compact source-shaped prompt records:
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"sort"
@@ -242,6 +243,9 @@ func writeExpandedBundledTrace(path string, sourcePath string, workload Workload
 	if len(entries) == 0 {
 		return fmt.Errorf("bundled trace %s has no rows", sourcePath)
 	}
+	if err := applyDerivedHashIDs(entries, workload); err != nil {
+		return err
+	}
 	if workload.Phase.TraceMode == "source_window" {
 		if workload.Phase.WindowSeconds > 0 {
 			entries = selectTraceWindow(entries, workload.Phase.WindowSeconds*1000, workload.Phase.Selection)
@@ -278,6 +282,78 @@ func writeExpandedBundledTrace(path string, sourcePath string, workload Workload
 	}
 	scaleEntriesToDuration(expanded, workload.Phase.DurationSeconds)
 	return writeTraceEntries(path, expanded)
+}
+
+func applyDerivedHashIDs(entries []AIPerfTraceEntry, workload Workload) error {
+	if workload.Category != "rag" && workload.Category != "agentic" {
+		return nil
+	}
+
+	path := filepath.Join(bundledPromptDir, workload.ID+".jsonl")
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	records, err := readJSONRecords(file, 0)
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		return nil
+	}
+
+	for i := range entries {
+		entries[i].HashIDs = componentHashIDs(records[i%len(records)], workload.Category)
+	}
+	return nil
+}
+
+func componentHashIDs(record map[string]any, category string) []int {
+	switch category {
+	case "rag":
+		return hashComponents(
+			[]string{"rag:system", firstString(record, "system", "system_prompt")},
+			[]string{"rag:retrieved", firstString(record, "documents", "retrieved_docs", "context", "passages")},
+			[]string{"rag:history", firstString(record, "history", "chat_history", "messages")},
+			[]string{"rag:question", firstString(record, "question", "query", "user_input", "input")},
+		)
+	case "agentic":
+		task := firstString(record, "instruction", "task", "user_prompt", "goal", "description")
+		if task == "" {
+			task = renderChatRecord(record, []string{"messages", "trajectory", "turns"})
+		}
+		return hashComponents(
+			[]string{"agentic:task", task},
+			[]string{"agentic:tools", anyToText(record["tools"])},
+			[]string{"agentic:state", anyToText(firstPresent(record, "initial_state", "database", "state"))},
+		)
+	default:
+		return nil
+	}
+}
+
+func hashComponents(components ...[]string) []int {
+	ids := make([]int, 0, len(components))
+	for _, component := range components {
+		if len(component) != 2 || strings.TrimSpace(component[1]) == "" {
+			continue
+		}
+		ids = append(ids, stableHashID(component[0], component[1]))
+	}
+	return ids
+}
+
+func stableHashID(namespace string, value string) int {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(namespace))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(strings.TrimSpace(value)))
+	return int(hash.Sum32()&0x7fffffff) + 1
 }
 
 func downsampleTrace(entries []AIPerfTraceEntry, target int) []AIPerfTraceEntry {
