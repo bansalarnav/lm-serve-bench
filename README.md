@@ -1,62 +1,123 @@
 # lm-serve-bench
 
-`lm-serve-bench` is a benchmark for systems serving a single LLM.
+`lm-serve-bench` prepares and runs a fixed-schedule LLM serving benchmark against an OpenAI-compatible chat completions endpoint. It uses the bundled suite definition in `data/suites/default.json`, materializes AIPerf-compatible workload directories, runs AIPerf, and writes a compact benchmark summary.
 
-The project separates:
+## Workloads
 
-- bundled traffic traces: arrivals, sessions, cache shape, tool delays, and input lengths
-- bundled prompt sources: the actual text rendered into requests
-- AIPerf harness exports: the concrete files used to issue traffic and collect metrics
+The default suite runs for 25 minutes unless overridden. Running every workload as the mixed `overall` replay sends 241,825 requests.
 
-The first implementation targets AIPerf because it already supports fixed-schedule replay, request-rate and concurrency modes, custom datasets, public trace formats, prefix synthesis, raw payload replay, and headless reports.
+| Workload | Requests | Trace source | Realistic prompt source |
+| --- | ---: | --- | --- |
+| `prod-chat` | 116,366 | [Azure LLM Inference Trace 2024](https://raw.githubusercontent.com/Azure/AzurePublicDataset/master/AzureLLMInferenceDataset2024.md) | [ShareGPT](https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered), [WildChat](https://huggingface.co/datasets/allenai/WildChat-4.8M) |
+| `prod-cache` | 11,219 | [Qwen Bailian usage traces](https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon) | Deterministic block renderer keyed by trace `hash_ids` |
+| `rag-cache` | 8,000 | [RAGPulse](https://github.com/flashserve/RAGPulse) | [RAGPulse](https://github.com/flashserve/RAGPulse) |
+| `code-repo` | 80,000 | [Azure LLM Inference Trace 2024](https://raw.githubusercontent.com/Azure/AzurePublicDataset/master/AzureLLMInferenceDataset2024.md) | [Blazedit](https://huggingface.co/datasets/vdaita/edit_5k_char), [SWE-bench Lite](https://huggingface.co/datasets/SWE-bench/SWE-bench_Lite), [BigCodeBench](https://huggingface.co/datasets/bigcode/bigcodebench-hard) |
+| `long-context` | 240 | Synthetic long-context arrivals | [LongBench v2](https://huggingface.co/datasets/THUDM/LongBench-v2), [InfiniteBench](https://github.com/OpenBMB/InfiniteBench), [RULER](https://github.com/NVIDIA/RULER) |
+| `agentic-tools` | 16,000 | [tau2-bench](https://github.com/sierra-research/tau2-bench), [tau-bench historical trajectories](https://github.com/sierra-research/tau-bench) | [tau-bench](https://github.com/sierra-research/tau-bench), [tau2-bench](https://github.com/sierra-research/tau2-bench) |
+| `cache-control` | 10,000 | Synthetic phased arrivals | Synthetic prefix generator |
 
-## Current default suite
+## Trace Derivation
 
-- `prod-chat`: Azure production conversation trace window, with ShareGPT/WildChat prompt pools for throughput sweeps
-- `prod-cache`: Qwen Bailian cache block replay with real `hash_ids`
-- `rag-cache`: RAGPulse-style repeated retrieved-context sessions
-- `code-repo`: Azure production code trace window, with Blazedit, SWE-bench, and BigCodeBench prompt pools
-- `long-context`: LongBench, InfiniteBench, and RULER-style long prompts for 32k+ contexts
-- `agentic-tools`: tau-bench/tau2-bench-style tool-heavy sessions with client-side gaps
-- `cache-control`: synthetic high-cache and low-cache calibration controls
+Each workload is materialized into `trace.jsonl`, `pool.jsonl`, `workload.json`, `aiperf.yaml`, and runnable shell scripts under the output directory.
+
+`prod-chat` uses a bundled Azure trace file with 116,366 rows. The materializer keeps the selected source-window timestamps and input lengths, then renders chat prompts from the bundled ShareGPT/WildChat records into the request pool. It does not add `hash_ids`.
+
+`prod-cache` uses a bundled Qwen Bailian trace file with 11,219 rows. The replay preserves timestamps, input lengths, and source cache block `hash_ids`; those IDs are also what make repeated prefix blocks repeat in the rendered prompt text. Example hash IDs include `1089`, `1090`, `1091`, and longer per-block IDs from the bundled trace.
+
+`rag-cache` starts from 6 bundled RAGPulse trace rows and 3 bundled prompt records. The trace is repeated until it reaches 8,000 requests, then scaled across the workload duration. Its `hash_ids` are derived during materialization from prompt components: `rag:system`, `rag:retrieved`, `rag:history`, and `rag:question`. The stable ID algorithm is FNV-1a over the component namespace plus trimmed component text. Example derived IDs include `420860683`, `530162297`, `157273401`, and `1321135449`.
+
+`code-repo` uses a bundled Azure code trace file with 131,765 rows. The materializer selects the high-variance 25-minute source window, downsamples it to 80,000 requests, and renders code prompts from SWE-bench, BigCodeBench, and Blazedit records. It does not add `hash_ids`.
+
+`long-context` starts from 4 bundled synthetic long-context trace rows and 4 prompt records. It repeats the rows to 240 requests, scales them across the workload duration, and pads rendered long-context prompts to the requested approximate input lengths. It does not add `hash_ids`.
+
+`agentic-tools` starts from 6 bundled tau-bench/tau2 trace rows and 3 bundled prompt records. The trace is repeated to 16,000 requests and scaled across the workload duration. Its `hash_ids` are derived from `agentic:task`, `agentic:tools`, and `agentic:state` prompt components with the same stable FNV-1a hash function. Example derived IDs include `1909052184`, `2039932256`, and `850464974`.
+
+`cache-control` is generated deterministically when no bundled trace exists. It creates synthetic timestamps, input lengths, and cache-sharing `hash_ids`; even-numbered requests reuse shared prefix IDs such as `8001`, `8002`, and `8003`, while other requests use unique suffix-style IDs.
+
+When `--workload all` is used without a sweep, the benchmark creates an `overall` mixed replay. It rescales every materialized workload trace to the same replay duration, tags each row with `_workload`, sorts all rows by timestamp, and runs that single interleaved trace.
+
+## What Happens When You Run It
+
+1. `lm-serve-bench run` loads the suite JSON from `--suite`, defaulting to `data/suites/default.json`.
+2. It materializes every suite workload into `--out`, defaulting to `out/default`.
+3. Materialization writes `workload.json`, `trace.jsonl`, `pool.jsonl`, `aiperf.yaml`, `run.sh`, `sweep-load.sh`, and `sweep-throughput.sh` for each workload. Load sweep trace files are precomputed from the base trace.
+4. If `--workload all` and no sweep are selected, it creates `overall/trace.jsonl` by interleaving all workload traces and runs only `overall/run.sh`.
+5. If a single workload is selected, it runs that workload's script. If `--workload all` is used with a sweep, it runs the chosen sweep script once per workload.
+6. The script invokes `${AIPERF_BIN:-aiperf} profile` with chat streaming enabled, `temperature:0`, the configured model, and the configured endpoint.
+7. AIPerf writes its artifacts under each workload's artifact directory.
+8. `lm-serve-bench` scans for AIPerf JSON exports, computes request counts, throughput, token throughput, TTFT, latency, TPOT, and sequence-length summaries, then writes `summary.json` and `summary.md`.
+9. A terminal summary is printed after successful non-dry-run execution.
 
 ## Usage
 
 ```sh
-go run ./cmd/lm-serve-bench run --endpoint http://localhost:8000 --model Qwen/Qwen3-0.6B --workload all
-go run ./cmd/lm-serve-bench run --endpoint http://localhost:8000 --model Qwen/Qwen3-0.6B --workload cache-control
-go run ./cmd/lm-serve-bench run --endpoint http://localhost:8000 --model Qwen/Qwen3-0.6B --workload cache-control --duration 10m
-go run ./cmd/lm-serve-bench run --endpoint http://localhost:8000 --model Qwen/Qwen3-0.6B --workload cache-control --sweep load
-go run ./cmd/lm-serve-bench run --endpoint http://localhost:8000 --model Qwen/Qwen3-0.6B --workload cache-control --sweep rps --target-rps 100 --ramp-steps 5
-go run ./cmd/lm-serve-bench mock-server --addr 127.0.0.1:18080
+go run ./cmd/lm-serve-bench run \
+  --endpoint http://localhost:8000 \
+  --model Qwen/Qwen3-0.6B
 ```
 
-`run` prepares the suite, executes AIPerf, writes `summary.json` / `summary.md`, and prints terminal tables plus sweep graphs. The default `--workload all` mode builds one mixed `overall` trace that interleaves all workload categories over the benchmark window. The summary includes both aggregate `overall` metrics and per-workload metrics derived from the mixed run. Use `--duration 10m` to stretch or compress the default replay duration while preserving request order, input lengths, and cache hashes. Use `--dry-run` to print the generated commands without contacting an endpoint. Use `--sweep load`, `--sweep throughput`, or `--sweep rps --target-rps N` for diagnostic sweeps.
-
-If a workload has multiple exports, such as a load or throughput sweep, the workload row aggregates successful runs and the individual run metrics stay listed in `summary.json`. The terminal report also prints compact ASCII charts for sweep runs.
-
-Replay, load sweeps, and RPS ramps use AIPerf fixed-schedule `mooncake_trace` files. The RPS ramp generates scaled trace stages that gradually increase to the requested target while preserving request ordering, input lengths, and cache hashes. Throughput sweeps use generated `random_pool` data so AIPerf can run closed-loop concurrency without fixed-schedule constraints.
-
-The normal benchmark path uses the bundled workload data generated from the suite definitions. Users should not provide their own traces or prompt pools for comparable benchmark results.
-The standard production trace files are high-variance 25-minute source windows where public exact traces are bundled. Other workload families use deterministic source-shaped traces until their full upstream trace windows are imported.
-The bundled source contract lives in `data/bundled/manifest.json`.
-
-`mock-server` starts a small OpenAI-compatible endpoint for local smoke checks. It needs permission to bind a localhost port.
-
-## Docker
+Run one workload:
 
 ```sh
-docker build -t lm-serve-bench .
-docker run --rm lm-serve-bench run \
-  --endpoint http://host.docker.internal:8000 \
-  --model Qwen/Qwen3-0.6B \
-  --workload cache-control
-docker run --rm \
-  -v "$PWD/out:/bench/out" \
-  lm-serve-bench run \
-    --endpoint http://host.docker.internal:8000 \
-    --model Qwen/Qwen3-0.6B
+go run ./cmd/lm-serve-bench run --workload code-repo
 ```
 
-See [docs/aiperf.md](/Users/arnav/code/lm-serve-bench/docs/aiperf.md) for the AIPerf artifact layout.
-See [docs/workloads.md](/Users/arnav/code/lm-serve-bench/docs/workloads.md) for the workload taxonomy and category-collapse rationale.
+Print the generated scripts without running AIPerf:
+
+```sh
+go run ./cmd/lm-serve-bench run --dry-run
+```
+
+Start the built-in OpenAI-compatible mock endpoint:
+
+```sh
+go run ./cmd/lm-serve-bench mock-server --addr 127.0.0.1:8000
+```
+
+The mock server implements `/v1/chat/completions` and `/health`. It supports streaming and a configurable streamed token delay with `--token-delay`.
+
+## Features
+
+- Fixed-schedule trace replay through AIPerf's `mooncake_trace` input format.
+- Mixed `overall` replay that interleaves all default workloads into one benchmark run.
+- Single-workload execution with `--workload <id>`.
+- Custom suite path with `--suite`.
+- Custom output directory with `--out`.
+- Custom model name with `--model`.
+- Custom OpenAI-compatible endpoint with `--endpoint`.
+- Duration override for default trace replay with `--duration`, for example `--duration 10m` or `--duration 90s`.
+- Dry runs with `--dry-run`.
+- Load sweeps with `--sweep load`, using multipliers `0.25x`, `0.50x`, `1.00x`, `2.00x`, `4.00x`, and `8.00x`.
+- Throughput sweeps with `--sweep throughput`, using closed-loop concurrency levels `1`, `2`, `4`, `8`, `16`, `32`, `64`, `128`, and `256`.
+- RPS/QPS ramps with `--sweep rps --target-rps <n> --ramp-steps <n>`. `--target-qps` is accepted as an alias for `--target-rps`.
+- Random-pool throughput mode through generated `pool.jsonl` files.
+- Cache-aware traces with preserved or derived `hash_ids`.
+- Long-context prompt padding for long-context workloads.
+- Generated `aiperf.yaml` files for direct AIPerf use.
+- Generated runnable shell scripts for default replay and sweeps.
+- AIPerf binary override with `AIPERF_BIN`.
+- Artifact directory override with `ARTIFACT_DIR`.
+- Docker image support; the Dockerfile builds the Go binary and installs `aiperf`.
+
+## Outputs
+
+For the default output directory, expect:
+
+```text
+out/default/
+  suite.json
+  summary.json
+  summary.md
+  <workload>/
+    workload.json
+    trace.jsonl
+    pool.jsonl
+    aiperf.yaml
+    run.sh
+    sweep-load.sh
+    sweep-throughput.sh
+    trace-load-*.jsonl
+    artifacts/
+```
+
+RPS sweeps also generate `sweep-rps.sh` and `trace-rps-*.jsonl` at run time.
