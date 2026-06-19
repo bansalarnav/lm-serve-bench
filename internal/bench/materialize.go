@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -571,6 +572,101 @@ func scaleEntriesToDuration(entries []AIPerfTraceEntry, durationSeconds int) {
 	}
 }
 
+// defaultBurstEnvelope is used for the mixed "overall" replay when a suite does
+// not specify its own. It produces a quiet baseline, a slow diurnal-style ramp,
+// and two coordinated surges so contention metrics (autoscaling, queueing, cache
+// eviction) are actually exercised.
+func defaultBurstEnvelope() BurstEnvelope {
+	return BurstEnvelope{
+		Baseline:   0.6,
+		DiurnalAmp: 0.4,
+		Spikes: []EnvelopeSpike{
+			{At: 0.30, Width: 0.04, Amp: 2.2},
+			{At: 0.72, Width: 0.05, Amp: 2.8},
+		},
+	}
+}
+
+// envelopeRate evaluates the (unnormalized) arrival-rate multiplier at fraction
+// tau of the run. Absolute scale is irrelevant because the warp normalizes by
+// total load; only the shape matters.
+func envelopeRate(e BurstEnvelope, tau float64) float64 {
+	rate := e.Baseline + e.DiurnalAmp*(0.5-0.5*math.Cos(2*math.Pi*tau))
+	for _, spike := range e.Spikes {
+		if spike.Width <= 0 {
+			continue
+		}
+		z := (tau - spike.At) / spike.Width
+		rate += spike.Amp * math.Exp(-0.5*z*z)
+	}
+	if rate < 0.05 {
+		rate = 0.05
+	}
+	return rate
+}
+
+// applyBurstEnvelope warps timestamps so the merged stream's density follows the
+// envelope. The same monotonic warp is applied to every entry, so all workloads
+// bunch up at the same wall-clock peaks. Total count and the [0, duration] span
+// are preserved; within a region the original micro-structure is only locally
+// stretched or compressed.
+func applyBurstEnvelope(entries []AIPerfTraceEntry, env BurstEnvelope, durationSeconds int) {
+	if len(entries) == 0 || durationSeconds <= 0 {
+		return
+	}
+	durationMillis := durationSeconds * 1000
+
+	const grid = 1024
+	frac := make([]float64, grid)
+	var total float64
+	for i := 0; i < grid; i++ {
+		total += envelopeRate(env, float64(i)/float64(grid-1))
+		frac[i] = total
+	}
+	if total <= 0 {
+		return
+	}
+	for i := range frac {
+		frac[i] /= total
+	}
+
+	// frac[i] is the cumulative load fraction at grid time i/(grid-1)*duration.
+	// For a source timestamp t, target fraction p = t/duration; find the output
+	// time whose cumulative fraction equals p (inverse-CDF lookup).
+	for i := range entries {
+		p := float64(entries[i].Timestamp) / float64(durationMillis)
+		if p <= 0 {
+			entries[i].Timestamp = 0
+			continue
+		}
+		if p >= 1 {
+			entries[i].Timestamp = durationMillis
+			continue
+		}
+		lo, hi := 0, grid-1
+		for lo < hi {
+			mid := (lo + hi) / 2
+			if frac[mid] < p {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		}
+		if lo == 0 {
+			entries[i].Timestamp = 0
+			continue
+		}
+		f0, f1 := frac[lo-1], frac[lo]
+		t0 := float64(lo-1) / float64(grid-1) * float64(durationMillis)
+		t1 := float64(lo) / float64(grid-1) * float64(durationMillis)
+		out := t1
+		if f1 > f0 {
+			out = t0 + (t1-t0)*(p-f0)/(f1-f0)
+		}
+		entries[i].Timestamp = int(out + 0.5)
+	}
+}
+
 func bundledTracePeriod(entries []AIPerfTraceEntry, workload Workload) int {
 	last := entries[len(entries)-1].Timestamp
 	if last <= 0 {
@@ -692,7 +788,7 @@ func MaterializeMixedReplay(suite Suite, outDir string, durationSeconds int) (Wo
 		ID:              "overall",
 		Name:            "Overall mixed workload",
 		Category:        "mixed",
-		Description:     "All default workload categories interleaved into one fixed-schedule replay.",
+		Description:     "All default workload categories interleaved into one fixed-schedule replay, time-warped by a shared burst envelope so every workload surges and quiets together. Single-workload runs are unaffected.",
 		Pairing:         "mixed_trace_replay",
 		MetricsFocus:    []string{"autoscaling", "queueing", "cache-pressure", "mixed-workload-goodput"},
 		MaxOutputTokens: mixedMaxOutputTokens(suite),
@@ -715,6 +811,12 @@ func MaterializeMixedReplay(suite Suite, outDir string, durationSeconds int) (Wo
 		}
 		entries = append(entries, workloadEntries...)
 	}
+
+	env := defaultBurstEnvelope()
+	if suite.OverallBurst != nil {
+		env = *suite.OverallBurst
+	}
+	applyBurstEnvelope(entries, env, durationSeconds)
 
 	sort.SliceStable(entries, func(i, j int) bool {
 		return entries[i].Timestamp < entries[j].Timestamp
@@ -1007,11 +1109,10 @@ benchmark:
       type: fixed_schedule
       auto_offset: true
   generation:
-    max_tokens: %d
     temperature: 0
   artifacts:
     dir: ${ARTIFACT_DIR:artifacts/%s}
-`, maxOutputTokens(workload), workload.ID)
+`, workload.ID)
 }
 
 func aiperfShell(workload Workload) string {
@@ -1027,10 +1128,9 @@ ${AIPERF_BIN:-aiperf} profile \
   --custom-dataset-type mooncake_trace \
   --fixed-schedule \
   --fixed-schedule-auto-offset \
-  --osl %d \
   --artifact-dir "${ARTIFACT_DIR:-artifacts/%s}" \
   --extra-inputs temperature:0
-`, maxOutputTokens(workload), workload.ID)
+`, workload.ID)
 }
 
 func aiperfLoadSweepShell(workload Workload, sweeps []Sweep) string {
@@ -1051,10 +1151,9 @@ ${AIPERF_BIN:-aiperf} profile \
   --custom-dataset-type mooncake_trace \
   --fixed-schedule \
   --fixed-schedule-auto-offset \
-  --osl %d \
   --artifact-dir "${ARTIFACT_DIR:-artifacts/%s/load-%.2fx}" \
   --extra-inputs temperature:0
-`, multiplier, traceFile, maxOutputTokens(workload), workload.ID, multiplier)
+`, multiplier, traceFile, workload.ID, multiplier)
 	}
 	return script
 }
@@ -1094,10 +1193,9 @@ ${AIPERF_BIN:-aiperf} profile \
   --dataset-sampling-strategy random \
   --concurrency %d \
   --request-count %d \
-  --osl %d \
   --artifact-dir "${ARTIFACT_DIR:-artifacts/%s/throughput-c%d}" \
   --extra-inputs temperature:0
-`, c, c, workload.DefaultRequests, maxOutputTokens(workload), workload.ID, c)
+`, c, c, workload.DefaultRequests, workload.ID, c)
 	}
 	return script
 }
@@ -1120,10 +1218,9 @@ ${AIPERF_BIN:-aiperf} profile \
   --custom-dataset-type mooncake_trace \
   --fixed-schedule \
   --fixed-schedule-auto-offset \
-  --osl %d \
   --artifact-dir "${ARTIFACT_DIR:-%s}" \
   --extra-inputs temperature:0
-`, stage.Index, stage.RPS, stage.TraceFile, maxOutputTokens(workload), artifactDir)
+`, stage.Index, stage.RPS, stage.TraceFile, artifactDir)
 	}
 	return script
 }

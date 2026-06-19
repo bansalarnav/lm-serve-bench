@@ -7,12 +7,31 @@ import (
 )
 
 type Suite struct {
-	Name            string     `json:"name"`
-	Description     string     `json:"description"`
-	DurationMinutes int        `json:"duration_minutes"`
-	Harness         Harness    `json:"harness"`
-	Workloads       []Workload `json:"workloads"`
-	Sweeps          []Sweep    `json:"sweeps"`
+	Name            string         `json:"name"`
+	Description     string         `json:"description"`
+	DurationMinutes int            `json:"duration_minutes"`
+	Harness         Harness        `json:"harness"`
+	Workloads       []Workload     `json:"workloads"`
+	Sweeps          []Sweep        `json:"sweeps"`
+	OverallBurst    *BurstEnvelope `json:"overall_burst,omitempty"`
+}
+
+// BurstEnvelope shapes the macro-level arrival rate of the mixed "overall"
+// replay so that every workload surges and quiets together. It only affects
+// the merged overall trace; per-workload traces are left at their native
+// arrival pattern. When a suite leaves this nil, a default envelope is used.
+type BurstEnvelope struct {
+	Baseline   float64         `json:"baseline,omitempty"`    // trough-level rate multiplier
+	DiurnalAmp float64         `json:"diurnal_amp,omitempty"` // amplitude of the slow cosine ramp
+	Spikes     []EnvelopeSpike `json:"spikes,omitempty"`      // coordinated surges
+}
+
+// EnvelopeSpike is a Gaussian surge added to the envelope. At and Width are
+// fractions of the run [0,1]; Amp is the added peak height.
+type EnvelopeSpike struct {
+	At    float64 `json:"at"`
+	Width float64 `json:"width"`
+	Amp   float64 `json:"amp"`
 }
 
 type Harness struct {
