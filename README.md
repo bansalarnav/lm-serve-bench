@@ -16,6 +16,22 @@ The default suite runs for 25 minutes unless overridden. Running every workload 
 | `agentic-tools` | 16,000 | [tau2-bench](https://github.com/sierra-research/tau2-bench), [tau-bench historical trajectories](https://github.com/sierra-research/tau-bench) | [tau-bench](https://github.com/sierra-research/tau-bench), [tau2-bench](https://github.com/sierra-research/tau2-bench) |
 | `cache-control` | 10,000 | Synthetic phased arrivals | Synthetic prefix generator |
 
+## Workload Descriptions
+
+`prod-chat` represents bursty production chat traffic. It combines real arrival timing and input-length variation with rendered chat prompts, and is mainly useful for measuring queueing behavior, autoscaling behavior, TTFT, TPOT, and goodput under normal assistant-style traffic.
+
+`prod-cache` focuses on production prefix-cache behavior. It preserves Qwen Bailian cache block `hash_ids`, so the replay can exercise repeated prefixes, cache hits, cache eviction, memory pressure, and the latency impact of cache reuse.
+
+`rag-cache` models retrieval-augmented generation sessions. Requests include repeated system prompts, retrieved context, conversation history, and user questions, which makes it useful for measuring prefix/KV retention, RAG context prefill cost, and cache behavior across repeated components.
+
+`code-repo` covers code generation, code editing, and repository issue-solving prompts. It stresses longer prefill, larger prompt bodies, decode throughput, and latency for code-heavy workloads.
+
+`long-context` stresses prefill and KV memory with prompts at roughly 32k tokens and above. It is intentionally much smaller by request count because each request is large.
+
+`agentic-tools` represents multi-turn tool-use sessions. It replays tool-agent style calls separated by client-side gaps and repeated state/tool/task context, which makes it useful for testing KV retention, cache eviction, session latency, and autoscaling under idle gaps.
+
+`cache-control` is a deterministic calibration workload. It creates high-cache-sharing and low-cache-sharing request patterns so cache behavior can be compared against a controlled best-case/worst-case style baseline.
+
 ## Trace Derivation
 
 Each workload is materialized into `trace.jsonl`, `pool.jsonl`, `workload.json`, `aiperf.yaml`, and runnable shell scripts under the output directory.
