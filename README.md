@@ -2,7 +2,7 @@
 
 `lm-serve-bench` runs fixed-schedule LLM serving benchmarks against an OpenAI-compatible chat completions endpoint. It materializes workloads from `data/suites/default.json`, invokes AIPerf, and writes a summary.
 
-The default suite lasts 25 minutes. Its mixed `overall` replay sends 242,222 requests.
+The default suite lasts 25 minutes. Its mixed `overall` replay sends 249,391 requests.
 
 ## Workloads
 
@@ -10,7 +10,7 @@ The default suite lasts 25 minutes. Its mixed `overall` replay sends 242,222 req
 | --- | ---: | --- | --- |
 | `prod-chat` | 116,366 | [Azure LLM Inference Trace 2024](https://raw.githubusercontent.com/Azure/AzurePublicDataset/master/AzureLLMInferenceDataset2024.md) | [ShareGPT](https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered), [WildChat](https://huggingface.co/datasets/allenai/WildChat-4.8M) |
 | `prod-cache` | 11,219 | [Qwen Bailian usage traces](https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon) | Deterministic renderer keyed by trace `hash_ids` |
-| `rag-cache` | 3,307 | [RAGPulse](https://github.com/flashserve/RAGPulse) | [RAGPulse](https://github.com/flashserve/RAGPulse) |
+| `rag-cache` | 10,476 | [Mooncake ArXiv production trace](https://github.com/kvcache-ai/Mooncake/tree/main/FAST25-release/arxiv-trace) | [RAGPulse](https://github.com/flashserve/RAGPulse) |
 | `code-repo` | 80,000 | [Azure LLM Inference Trace 2024](https://raw.githubusercontent.com/Azure/AzurePublicDataset/master/AzureLLMInferenceDataset2024.md) | [Blazedit](https://huggingface.co/datasets/vdaita/edit_5k_char), [SWE-bench Lite](https://huggingface.co/datasets/SWE-bench/SWE-bench_Lite), [BigCodeBench](https://huggingface.co/datasets/bigcode/bigcodebench-hard) |
 | `long-context` | 1,111 | [Mooncake ArXiv production trace](https://github.com/kvcache-ai/Mooncake/tree/main/FAST25-release/arxiv-trace) | [LongBench v2](https://huggingface.co/datasets/THUDM/LongBench-v2), [InfiniteBench](https://github.com/OpenBMB/InfiniteBench), [RULER](https://github.com/NVIDIA/RULER) |
 | `agentic-tools` | 20,219 | [tau2-bench](https://github.com/sierra-research/tau2-bench) | [tau-bench](https://github.com/sierra-research/tau-bench), [tau2-bench](https://github.com/sierra-research/tau2-bench) |
@@ -32,7 +32,7 @@ Each workload becomes `trace.jsonl`, `pool.jsonl`, `workload.json`, `aiperf.yaml
 
 - `prod-chat` preserves an Azure 25-minute trace window's timestamps and input lengths. ShareGPT and WildChat records fill the prompt pool. No hashes are added.
 - `prod-cache` preserves the Qwen trace's timestamps, lengths, and cache-block `hash_ids`, including IDs such as `1089`, `1090`, and `1091`. Those IDs also key the deterministic prompt renderer.
-- `rag-cache` preserves a high-variance 25-minute RAGPulse window, including component hashes for system prompts, passages, history, web search, and user input.
+- `rag-cache` pairs a dense high-variance 25-minute Mooncake ArXiv Q&A replay, including real cache-block hashes, with the RAGPulse system, passage, history, and question prompt pool.
 - `code-repo` selects a high-variance Azure window, downsamples it to 80,000 requests, and builds a code prompt pool. No hashes are added.
 - `long-context` preserves a 1,111-row high-variance 25-minute Mooncake ArXiv production-trace window filtered to 16k+ input tokens. It includes 395 requests at 30k+ and 236 at 40k+, and preserves source cache block `hash_ids`. The prompt pool still uses LongBench, InfiniteBench, and RULER-shaped records for the throughput sweep.
 - `agentic-tools` converts timed tau2 assistant calls, repeats their cadence to fill the benchmark duration, and derives hashes from source files and tool names for calls with tools.

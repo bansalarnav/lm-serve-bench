@@ -17,11 +17,11 @@
       "notes": "High-variance 25-minute window from Qwen Bailian trace; exact timestamps, input lengths, and cache block hashes are preserved."
     },
     {
-      "id": "ragpulse",
+      "id": "mooncake-arxiv-rag",
       "kind": "trace",
       "workload": "rag-cache",
       "file": "data/bundled/traces/rag-cache.jsonl",
-      "notes": "3,307 real RAGPulse rows from the highest-variance 25-minute window in data/0_trace.jsonl; upstream timestamps, input lengths, and component hash ids are preserved."
+      "notes": "10,476 real requests from a high-variance 25-minute Mooncake ArXiv production-trace window; source timestamps, input lengths, and cache block hashes are preserved."
     },
     {
       "id": "ragpulse",

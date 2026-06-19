@@ -107,7 +107,7 @@ func traceDefaultSource(workloadID string) string {
 	case "code-repo":
 		return "azure"
 	case "rag-cache":
-		return "ragpulse"
+		return "mooncake-arxiv-rag"
 	case "long-context":
 		return "synthetic-long-context"
 	case "agentic-tools":

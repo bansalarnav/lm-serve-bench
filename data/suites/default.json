@@ -80,12 +80,12 @@
       "id": "rag-cache",
       "name": "RAG cache and session replay",
       "category": "rag",
-      "description": "RAG-style repeated components with system prompts, retrieved passages, chat history, and user questions.",
+      "description": "Dense ArXiv Q&A traffic with real cache-block reuse, paired with RAG-style system prompts, retrieved passages, chat history, and user questions.",
       "traffic_sources": [
         {
-          "name": "RAGPulse",
-          "url": "https://github.com/flashserve/RAGPulse",
-          "notes": "RAG workload trace with timestamps, input/output lengths, session ids, and hashed prompt components."
+          "name": "Mooncake ArXiv production trace",
+          "url": "https://github.com/kvcache-ai/Mooncake/tree/main/FAST25-release/arxiv-trace",
+          "notes": "High-variance 25-minute ArXiv Q&A trace window with real timestamps, input lengths, and cache block hashes."
         }
       ],
       "prompt_sources": [
@@ -95,10 +95,10 @@
           "notes": "RAG records rendered from system, retrieved context, history, and question fields."
         }
       ],
-      "pairing": "preserve_component_hashes",
+      "pairing": "mooncake_arrivals_and_cache_blocks_plus_rag_prompt_pool",
       "metrics_focus": ["prefix-cache-hit-rate", "kv-retention", "ttft", "rag-context-prefill"],
       "max_output_tokens": 192,
-      "default_requests": 3307,
+      "default_requests": 10476,
       "phase": {
         "type": "fixed_schedule",
         "duration_seconds": 1500,

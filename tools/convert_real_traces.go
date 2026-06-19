@@ -23,7 +23,7 @@ type traceRow struct {
 
 func main() {
 	if len(os.Args) < 4 {
-		fatalf("usage: go run tools/convert_real_traces.go ragpulse|bailian-long|mooncake-long|tau2 <out.jsonl> <input...>")
+		fatalf("usage: go run tools/convert_real_traces.go ragpulse|bailian-long|mooncake-rag|mooncake-long|tau2 <out.jsonl> <input...>")
 	}
 
 	mode := os.Args[1]
@@ -37,6 +37,8 @@ func main() {
 		rows, err = convertRAGPulse(inputs[0])
 	case "bailian-long":
 		rows, err = convertBailianLong(inputs[0])
+	case "mooncake-rag":
+		rows, err = convertMooncakeRAG(inputs[0])
 	case "mooncake-long":
 		rows, err = convertMooncakeLong(inputs[0])
 	case "tau2":
@@ -53,7 +55,15 @@ func main() {
 	fmt.Printf("wrote %d rows to %s\n", len(rows), outPath)
 }
 
+func convertMooncakeRAG(path string) ([]traceRow, error) {
+	return convertMooncakeWindow(path, 0, "mooncake-arxiv-rag")
+}
+
 func convertMooncakeLong(path string) ([]traceRow, error) {
+	return convertMooncakeWindow(path, 16000, "mooncake-arxiv")
+}
+
+func convertMooncakeWindow(path string, minInputLength int, source string) ([]traceRow, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -74,11 +84,11 @@ func convertMooncakeLong(path string) ([]traceRow, error) {
 		if err := json.Unmarshal(scanner.Bytes(), &in); err != nil {
 			return nil, err
 		}
-		if in.InputLength < 16000 {
+		if in.InputLength < minInputLength {
 			continue
 		}
 		rows = append(rows, traceRow{
-			Source:      "mooncake-arxiv",
+			Source:      source,
 			Timestamp:   in.Timestamp,
 			InputLength: in.InputLength,
 			HashIDs:     in.HashIDs,
@@ -175,6 +185,10 @@ func selectHighestVarianceWindow(rows []traceRow, windowMillis int) []traceRow {
 	if len(rows) == 0 || windowMillis <= 0 {
 		return rows
 	}
+	rows = append([]traceRow(nil), rows...)
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].Timestamp < rows[j].Timestamp
+	})
 
 	bestStart, bestEnd := 0, 0
 	bestScore := math.Inf(-1)

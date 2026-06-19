@@ -12,7 +12,7 @@ Files under `data/bundled/traces/` are the benchmark traffic inputs. When public
 
 - `prod-chat.jsonl`: high-variance Azure conversation trace window.
 - `prod-cache.jsonl`: high-variance Qwen Bailian prefix-cache trace window with repeated block hashes.
-- `rag-cache.jsonl`: real RAGPulse component/session rows from a high-variance 25-minute source window, with upstream timestamps, input lengths, and component hash IDs.
+- `rag-cache.jsonl`: real high-variance 25-minute Mooncake ArXiv Q&A trace rows with source timestamps, input lengths, and cache block hashes. RAGPulse supplies the paired prompt/component pool.
 - `code-repo.jsonl`: high-variance Azure code trace window.
 - `long-context.jsonl`: a real high-variance 25-minute Mooncake ArXiv production-trace window filtered to 16k+ input tokens, including dense 30k+ and 40k+ requests with source cache block hashes.
 - `agentic-tools.jsonl`: one real 9m10s tau2 timed assistant LLM-call run derived from airline and retail result files; it is repeated on its original cadence to fill the default window.
