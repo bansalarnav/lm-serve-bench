@@ -23,7 +23,7 @@ type traceRow struct {
 
 func main() {
 	if len(os.Args) < 4 {
-		fatalf("usage: go run tools/convert_real_traces.go ragpulse|tau2 <out.jsonl> <input...>")
+		fatalf("usage: go run tools/convert_real_traces.go ragpulse|bailian-long|mooncake-long|tau2 <out.jsonl> <input...>")
 	}
 
 	mode := os.Args[1]
@@ -35,6 +35,10 @@ func main() {
 	switch mode {
 	case "ragpulse":
 		rows, err = convertRAGPulse(inputs[0])
+	case "bailian-long":
+		rows, err = convertBailianLong(inputs[0])
+	case "mooncake-long":
+		rows, err = convertMooncakeLong(inputs[0])
 	case "tau2":
 		rows, err = convertTau2(inputs)
 	default:
@@ -47,6 +51,80 @@ func main() {
 		fatalf("%v", err)
 	}
 	fmt.Printf("wrote %d rows to %s\n", len(rows), outPath)
+}
+
+func convertMooncakeLong(path string) ([]traceRow, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	type mooncakeRow struct {
+		Timestamp   int   `json:"timestamp"`
+		InputLength int   `json:"input_length"`
+		HashIDs     []int `json:"hash_ids"`
+	}
+
+	var rows []traceRow
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024), 16*1024*1024)
+	for scanner.Scan() {
+		var in mooncakeRow
+		if err := json.Unmarshal(scanner.Bytes(), &in); err != nil {
+			return nil, err
+		}
+		if in.InputLength < 16000 {
+			continue
+		}
+		rows = append(rows, traceRow{
+			Source:      "mooncake-arxiv",
+			Timestamp:   in.Timestamp,
+			InputLength: in.InputLength,
+			HashIDs:     in.HashIDs,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return selectHighestVarianceWindow(rows, 25*60*1000), nil
+}
+
+func convertBailianLong(path string) ([]traceRow, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	type bailianRow struct {
+		Timestamp   float64 `json:"timestamp"`
+		InputLength int     `json:"input_length"`
+		HashIDs     []int   `json:"hash_ids"`
+	}
+
+	var rows []traceRow
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 1024), 16*1024*1024)
+	for scanner.Scan() {
+		var in bailianRow
+		if err := json.Unmarshal(scanner.Bytes(), &in); err != nil {
+			return nil, err
+		}
+		if in.InputLength < 16000 {
+			continue
+		}
+		rows = append(rows, traceRow{
+			Source:      "qwen-bailian-thinking",
+			Timestamp:   int(math.Round(in.Timestamp * 1000)),
+			InputLength: in.InputLength,
+			HashIDs:     in.HashIDs,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return selectHighestVarianceWindow(rows, 25*60*1000), nil
 }
 
 type ragPulseRow struct {

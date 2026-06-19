@@ -2,7 +2,7 @@
 
 `lm-serve-bench` runs fixed-schedule LLM serving benchmarks against an OpenAI-compatible chat completions endpoint. It materializes workloads from `data/suites/default.json`, invokes AIPerf, and writes a summary.
 
-The default suite lasts 25 minutes. Its mixed `overall` replay sends 241,351 requests.
+The default suite lasts 25 minutes. Its mixed `overall` replay sends 242,222 requests.
 
 ## Workloads
 
@@ -12,7 +12,7 @@ The default suite lasts 25 minutes. Its mixed `overall` replay sends 241,351 req
 | `prod-cache` | 11,219 | [Qwen Bailian usage traces](https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon) | Deterministic renderer keyed by trace `hash_ids` |
 | `rag-cache` | 3,307 | [RAGPulse](https://github.com/flashserve/RAGPulse) | [RAGPulse](https://github.com/flashserve/RAGPulse) |
 | `code-repo` | 80,000 | [Azure LLM Inference Trace 2024](https://raw.githubusercontent.com/Azure/AzurePublicDataset/master/AzureLLMInferenceDataset2024.md) | [Blazedit](https://huggingface.co/datasets/vdaita/edit_5k_char), [SWE-bench Lite](https://huggingface.co/datasets/SWE-bench/SWE-bench_Lite), [BigCodeBench](https://huggingface.co/datasets/bigcode/bigcodebench-hard) |
-| `long-context` | 240 | Synthetic arrivals | [LongBench v2](https://huggingface.co/datasets/THUDM/LongBench-v2), [InfiniteBench](https://github.com/OpenBMB/InfiniteBench), [RULER](https://github.com/NVIDIA/RULER) |
+| `long-context` | 1,111 | [Mooncake ArXiv production trace](https://github.com/kvcache-ai/Mooncake/tree/main/FAST25-release/arxiv-trace) | [LongBench v2](https://huggingface.co/datasets/THUDM/LongBench-v2), [InfiniteBench](https://github.com/OpenBMB/InfiniteBench), [RULER](https://github.com/NVIDIA/RULER) |
 | `agentic-tools` | 20,219 | [tau2-bench](https://github.com/sierra-research/tau2-bench) | [tau-bench](https://github.com/sierra-research/tau-bench), [tau2-bench](https://github.com/sierra-research/tau2-bench) |
 | `cache-control` | 10,000 | Synthetic phased arrivals | Synthetic prefix generator |
 
@@ -22,7 +22,7 @@ The default suite lasts 25 minutes. Its mixed `overall` replay sends 241,351 req
 - `prod-cache`: production cache traces for prefix reuse, eviction, and memory-pressure behavior.
 - `rag-cache`: RAG requests with repeated system prompts, retrieved context, history, and questions.
 - `code-repo`: code generation, editing, and repository issue tasks.
-- `long-context`: 32k-plus-token prompts that stress prefill and KV memory.
+- `long-context`: production requests at 16k+ tokens that stress prefill and KV memory, including dense 30k+ and 40k+ tails.
 - `agentic-tools`: timed, multi-turn tool-use sessions with idle gaps.
 - `cache-control`: deterministic high-sharing and low-sharing cache baselines.
 
@@ -34,7 +34,7 @@ Each workload becomes `trace.jsonl`, `pool.jsonl`, `workload.json`, `aiperf.yaml
 - `prod-cache` preserves the Qwen trace's timestamps, lengths, and cache-block `hash_ids`, including IDs such as `1089`, `1090`, and `1091`. Those IDs also key the deterministic prompt renderer.
 - `rag-cache` preserves a high-variance 25-minute RAGPulse window, including component hashes for system prompts, passages, history, web search, and user input.
 - `code-repo` selects a high-variance Azure window, downsamples it to 80,000 requests, and builds a code prompt pool. No hashes are added.
-- `long-context` repeats four synthetic trace rows to 240 requests and scales them to the chosen duration. The prompt pool is padded to the requested approximate input lengths. No hashes are added.
+- `long-context` preserves a 1,111-row high-variance 25-minute Mooncake ArXiv production-trace window filtered to 16k+ input tokens. It includes 395 requests at 30k+ and 236 at 40k+, and preserves source cache block `hash_ids`. The prompt pool still uses LongBench, InfiniteBench, and RULER-shaped records for the throughput sweep.
 - `agentic-tools` converts timed tau2 assistant calls, repeats their cadence to fill the benchmark duration, and derives hashes from source files and tool names for calls with tools.
 - `cache-control` generates timestamps, lengths, and deterministic hashes. Even requests reuse shared prefix IDs such as `8001`, `8002`, and `8003`; the others use unique IDs.
 

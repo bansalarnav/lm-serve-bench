@@ -154,12 +154,12 @@
       "id": "long-context",
       "name": "Long context and memory pressure",
       "category": "long-context",
-      "description": "Prompts at 32k tokens and above to stress prefill, KV memory, and decode batching under large contexts.",
+      "description": "Production long-context requests at 16k tokens and above, including dense 30k+ and 40k+ tails, to stress prefill, KV memory, and decode batching.",
       "traffic_sources": [
         {
-          "name": "Synthetic long-context arrivals",
-          "url": "",
-          "notes": "Short default replay with configurable uniform and burst-like phases."
+          "name": "Mooncake ArXiv production trace",
+          "url": "https://github.com/kvcache-ai/Mooncake/tree/main/FAST25-release/arxiv-trace",
+          "notes": "High-variance 25-minute production window selected from the ArXiv trace after filtering to requests with at least 16k input tokens."
         }
       ],
       "prompt_sources": [
@@ -182,11 +182,14 @@
       "pairing": "native_long_prompt_bucket_sampling",
       "metrics_focus": ["prefill-throughput", "kv-memory-pressure", "effective-batch-size", "ttft"],
       "max_output_tokens": 128,
-      "default_requests": 240,
+      "default_requests": 1111,
       "phase": {
         "type": "fixed_schedule",
         "duration_seconds": 1500,
-        "warmup_requests": 8
+        "warmup_requests": 8,
+        "trace_mode": "source_window",
+        "window_seconds": 1500,
+        "selection": "high-variance"
       }
     },
     {

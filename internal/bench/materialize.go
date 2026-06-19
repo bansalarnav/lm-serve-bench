@@ -202,7 +202,11 @@ func writeOrCopyPool(path string, workload Workload) error {
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
-	for i := 0; i < max(1, workload.DefaultRequests); i++ {
+	poolSize := max(1, workload.DefaultRequests)
+	if workload.Category == "long-context" {
+		poolSize = len(prompts)
+	}
+	for i := 0; i < poolSize; i++ {
 		text := prompts[i%len(prompts)]
 		if workload.Category == "long-context" {
 			text = expandLongContextPrompt(text, syntheticInputLength(i, workload.Category), i)

@@ -59,11 +59,11 @@
       "notes": "Code-edit prompt records."
     },
     {
-      "id": "synthetic-long-context",
+      "id": "mooncake-arxiv",
       "kind": "trace",
       "workload": "long-context",
       "file": "data/bundled/traces/long-context.jsonl",
-      "notes": "Long-context arrivals at 32k tokens and above."
+      "notes": "1,111 real requests from a high-variance 25-minute Mooncake ArXiv production-trace window, filtered to input lengths of at least 16k tokens. The window includes 395 requests at 30k+ tokens and 236 at 40k+ tokens, with source cache block hashes preserved."
     },
     {
       "id": "longbench",
