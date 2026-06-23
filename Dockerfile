@@ -20,5 +20,4 @@ COPY data ./data
 COPY docs ./docs
 COPY README.md ./README.md
 
-ENTRYPOINT ["lm-serve-bench"]
-CMD ["run"]
+ENTRYPOINT ["lm-serve-bench", "run"]

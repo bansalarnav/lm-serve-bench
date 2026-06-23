@@ -44,11 +44,30 @@ With `--workload all` and no sweep, all traces are rescaled to one duration, tag
 
 ## Running A Benchmark
 
+Docker is the recommended way to run the benchmark. Build the image once:
+
+```sh
+docker build -t lm-serve-bench .
+```
+
+Then provide only the endpoint and model:
+
+```sh
+docker run --rm lm-serve-bench \
+  --endpoint http://host.docker.internal:8000 \
+  --model Qwen/Qwen3-0.6B
+```
+
+Use your endpoint's normal reachable URL. `host.docker.internal` reaches a
+server running on the host machine in Docker Desktop.
+
 1. Load the suite and materialize every workload under `--out` (default: `out/default`).
 2. Build the mixed `overall` trace, or select one workload or sweep script.
 3. Run `${AIPERF_BIN:-aiperf} profile` with streaming enabled, `temperature:0`, the chosen model, and endpoint.
 4. AIPerf writes its artifacts under the workload artifact directory.
 5. The benchmark reads AIPerf JSON exports and writes `summary.json` and `summary.md`.
+
+For local development without Docker:
 
 ```sh
 go run ./cmd/lm-serve-bench run \
