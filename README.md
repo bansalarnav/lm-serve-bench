@@ -30,15 +30,15 @@ The default suite lasts 25 minutes. Its mixed `overall` replay sends 249,391 req
 
 Each workload becomes `trace.jsonl`, `pool.jsonl`, `workload.json`, `aiperf.yaml`, and runnable scripts in the output directory.
 
-- `prod-chat` preserves an Azure 25-minute trace window's timestamps and input lengths. ShareGPT and WildChat records fill the prompt pool. No hashes are added.
+- `prod-chat` preserves an Azure 25-minute trace window's timestamps and input lengths. Trace rows include deterministically paired ShareGPT/WildChat prompt text chosen by approximate input-token length. No hashes are added.
 - `prod-cache` preserves the Qwen trace's timestamps, lengths, and cache-block `hash_ids`, including IDs such as `1089`, `1090`, and `1091`. Those IDs also key the deterministic prompt renderer.
-- `rag-cache` pairs a dense high-variance 25-minute Mooncake ArXiv Q&A replay, including real cache-block hashes, with the RAGPulse system, passage, history, and question prompt pool.
-- `code-repo` selects a high-variance Azure window, downsamples it to 80,000 requests, and builds a code prompt pool. No hashes are added.
-- `long-context` preserves a 1,111-row high-variance 25-minute Mooncake ArXiv production-trace window filtered to 16k+ input tokens. It includes 395 requests at 30k+ and 236 at 40k+, and preserves source cache block `hash_ids`. The prompt pool still uses LongBench, InfiniteBench, and RULER-shaped records for the throughput sweep.
+- `rag-cache` pairs a dense high-variance 25-minute Mooncake ArXiv Q&A replay, including real cache-block hashes, with available RAGPulse-shaped prompt text. Public RAGPulse component files expose IDs and token lengths rather than component prose, so text reuse is necessarily higher than for chat or long-context.
+- `code-repo` selects a high-variance Azure window, downsamples it to 80,000 requests, and includes deterministically paired Blazedit, SWE-bench Lite, and BigCodeBench prompt text. No hashes are added.
+- `long-context` preserves a 1,111-row high-variance 25-minute Mooncake ArXiv production-trace window filtered to 16k+ input tokens. It includes 395 requests at 30k+ and 236 at 40k+, preserves source cache block `hash_ids`, and includes deterministically paired LongBench v2 prompt text.
 - `agentic-tools` converts timed tau2 assistant calls, repeats their cadence to fill the benchmark duration, and derives hashes from source files and tool names for calls with tools.
 - `cache-control` generates timestamps, lengths, and deterministic hashes. Even requests reuse shared prefix IDs such as `8001`, `8002`, and `8003`; the others use unique IDs.
 
-Default replay, load sweeps, and RPS sweeps give AIPerf `trace.jsonl` as `mooncake_trace`: timestamps, `input_length`, and optional `hash_ids`, rather than full prompt text. `pool.jsonl` contains the realistic rendered prompts and is used only by the closed-loop throughput sweep.
+Default replay, load sweeps, and RPS sweeps give AIPerf `trace.jsonl` as `mooncake_trace`: timestamps, `input_length`, deterministic `input_text` where available, and optional `hash_ids`. `pool.jsonl` is still generated for the closed-loop throughput sweep.
 
 With `--workload all` and no sweep, all traces are rescaled to one duration, tagged with `_workload`, sorted by timestamp, and replayed as `overall`.
 
@@ -82,6 +82,9 @@ go run ./cmd/lm-serve-bench run --workload code-repo
 # Generate files and scripts without running AIPerf
 go run ./cmd/lm-serve-bench run --dry-run
 
+# Run a user-supplied Mooncake-format trace instead of the bundled workloads
+go run ./cmd/lm-serve-bench run --mooncake-trace ./trace.jsonl
+
 # Built-in OpenAI-compatible mock endpoint
 go run ./cmd/lm-serve-bench mock-server --addr 127.0.0.1:8000
 ```
@@ -103,6 +106,7 @@ For multiple runs, request and token throughputs are summed; latency distributio
 
 - Fixed-schedule replay and a mixed `overall` replay.
 - Run a single workload with `--workload <id>`.
+- Run a user-supplied Mooncake-format JSONL trace with `--mooncake-trace <path>`. This bypasses the bundled workloads and runs the file as `custom-trace`.
 - Override suite, output directory, model, endpoint, and replay duration with `--suite`, `--out`, `--model`, `--endpoint`, and `--duration`.
 - Use `--dry-run` to generate the benchmark without invoking AIPerf.
 - Load sweep: `--sweep load` with `0.25x`, `0.50x`, `1x`, `2x`, `4x`, and `8x` trace multipliers.

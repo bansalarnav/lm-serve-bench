@@ -8,13 +8,13 @@ The active bundled corpus lives in `data/bundled/`.
 
 `data/bundled/manifest.json` is the source contract for the shipped benchmark corpus.
 
-Files under `data/bundled/traces/` are the benchmark traffic inputs. When public exact traces are bundled, they are replayed without row-count expansion. Synthetic/control traces are explicitly labeled as synthetic.
+Files under `data/bundled/traces/` are the benchmark traffic inputs. When public exact traces are bundled, they are replayed without row-count expansion. Where source prompt text is available, trace rows also include a deterministic `input_text` chosen from the workload's prompt sources to closely match `input_length` while minimizing prompt reuse. Synthetic/control traces are explicitly labeled as synthetic.
 
-- `prod-chat.jsonl`: high-variance Azure conversation trace window.
+- `prod-chat.jsonl`: high-variance Azure conversation trace window with paired ShareGPT/WildChat prompt text.
 - `prod-cache.jsonl`: high-variance Qwen Bailian prefix-cache trace window with repeated block hashes.
-- `rag-cache.jsonl`: real high-variance 25-minute Mooncake ArXiv Q&A trace rows with source timestamps, input lengths, and cache block hashes. RAGPulse supplies the paired prompt/component pool.
-- `code-repo.jsonl`: high-variance Azure code trace window.
-- `long-context.jsonl`: a real high-variance 25-minute Mooncake ArXiv production-trace window filtered to 16k+ input tokens, including dense 30k+ and 40k+ requests with source cache block hashes.
+- `rag-cache.jsonl`: real high-variance 25-minute Mooncake ArXiv Q&A trace rows with source timestamps, input lengths, cache block hashes, and the available RAGPulse-shaped prompt text. Public RAGPulse component files expose IDs/token lengths rather than full component prose, so prompt reuse is higher for this workload.
+- `code-repo.jsonl`: high-variance Azure code trace window with paired Blazedit, SWE-bench Lite, and BigCodeBench prompt text.
+- `long-context.jsonl`: a real high-variance 25-minute Mooncake ArXiv production-trace window filtered to 16k+ input tokens, including dense 30k+ and 40k+ requests with source cache block hashes and paired LongBench v2 prompt text.
 - `agentic-tools.jsonl`: one real 9m10s tau2 timed assistant LLM-call run derived from airline and retail result files; it is repeated on its original cadence to fill the default window.
 
 Files under `data/bundled/prompts/` are compact source-shaped prompt records:

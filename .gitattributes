@@ -1,0 +1,6 @@
+data/bundled/traces/prod-chat.jsonl filter=lfs diff=lfs merge=lfs -text
+data/bundled/traces/rag-cache.jsonl filter=lfs diff=lfs merge=lfs -text
+data/bundled/traces/agentic-tools.jsonl filter=lfs diff=lfs merge=lfs -text
+data/bundled/traces/code-repo.jsonl filter=lfs diff=lfs merge=lfs -text
+data/bundled/traces/long-context.jsonl filter=lfs diff=lfs merge=lfs -text
+data/bundled/traces/prod-cache.jsonl filter=lfs diff=lfs merge=lfs -text

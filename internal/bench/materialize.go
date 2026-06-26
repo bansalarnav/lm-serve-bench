@@ -776,6 +776,128 @@ func ScaleWorkloadTraceDuration(workloadDir string, durationSeconds int) error {
 	return writeTraceEntries(tracePath, entries)
 }
 
+func MaterializeMooncakeTrace(outDir string, tracePath string, sweeps []Sweep) (Workload, error) {
+	entries, err := readTraceEntries(tracePath)
+	if err != nil {
+		return Workload{}, err
+	}
+	if len(entries) == 0 {
+		return Workload{}, fmt.Errorf("%s has no trace entries", tracePath)
+	}
+
+	workload := Workload{
+		ID:          "custom-trace",
+		Name:        "Custom Mooncake trace",
+		Category:    "custom-trace",
+		Description: "User-supplied Mooncake-format trace replay.",
+		TrafficSources: []DataSource{
+			{
+				Name:  "User-supplied Mooncake trace",
+				URL:   tracePath,
+				Notes: "Rows are preserved as supplied for fixed-schedule replay.",
+			},
+		},
+		Pairing:         "user_supplied_mooncake_trace",
+		MetricsFocus:    []string{"trace-replay", "queueing", "batching", "autoscaling"},
+		MaxOutputTokens: 256,
+		DefaultRequests: len(entries),
+		Phase: Phase{
+			Type:            "fixed_schedule",
+			DurationSeconds: traceDurationSeconds(entries),
+			TraceMode:       "user_supplied",
+		},
+	}
+
+	dir := filepath.Join(outDir, workload.ID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Workload{}, err
+	}
+
+	sourceData, err := os.ReadFile(tracePath)
+	if err != nil {
+		return Workload{}, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "trace.jsonl"), sourceData, 0o644); err != nil {
+		return Workload{}, err
+	}
+	if err := writeAIPerfPool(filepath.Join(dir, "pool.jsonl"), workload); err != nil {
+		return Workload{}, err
+	}
+	for _, multiplier := range loadMultipliers(sweeps) {
+		name := fmt.Sprintf("trace-load-%.2fx.jsonl", multiplier)
+		if err := writeScaledAIPerfTrace(filepath.Join(dir, name), filepath.Join(dir, "trace.jsonl"), multiplier); err != nil {
+			return Workload{}, err
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "aiperf.yaml"), []byte(aiperfYAML(workload)), 0o644); err != nil {
+		return Workload{}, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "run.sh"), []byte(aiperfShell(workload)), 0o755); err != nil {
+		return Workload{}, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sweep-load.sh"), []byte(aiperfLoadSweepShell(workload, sweeps)), 0o755); err != nil {
+		return Workload{}, err
+	}
+
+	data, err := json.MarshalIndent(MaterializedWorkload{
+		ID:              workload.ID,
+		Name:            workload.Name,
+		Category:        workload.Category,
+		Description:     workload.Description,
+		Pairing:         workload.Pairing,
+		MetricsFocus:    workload.MetricsFocus,
+		MaxOutputTokens: workload.MaxOutputTokens,
+		DefaultRequests: workload.DefaultRequests,
+		Phase:           workload.Phase,
+		TrafficSources:  workload.TrafficSources,
+		Harness:         aiperfHint(workload),
+		BundledData: CorpusInfo{
+			Mode:     "user_supplied_mooncake_trace",
+			Requests: len(entries),
+			Notes:    fmt.Sprintf("Copied from %s.", tracePath),
+		},
+	}, "", "  ")
+	if err != nil {
+		return Workload{}, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "workload.json"), append(data, '\n'), 0o644); err != nil {
+		return Workload{}, err
+	}
+
+	index := Suite{
+		Name:            "custom-mooncake-trace",
+		Description:     "User-supplied Mooncake trace replay.",
+		DurationMinutes: (workload.Phase.DurationSeconds + 59) / 60,
+		Harness: Harness{
+			Primary: "aiperf",
+			Reason:  "Uses AIPerf fixed-schedule replay with a user-supplied mooncake_trace JSONL file.",
+		},
+		Workloads: []Workload{workload},
+		Sweeps:    sweeps,
+	}
+	indexData, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		return Workload{}, err
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "suite.json"), append(indexData, '\n'), 0o644); err != nil {
+		return Workload{}, err
+	}
+	return workload, nil
+}
+
+func traceDurationSeconds(entries []AIPerfTraceEntry) int {
+	maxTimestamp := 0
+	for _, entry := range entries {
+		if entry.Timestamp > maxTimestamp {
+			maxTimestamp = entry.Timestamp
+		}
+	}
+	if maxTimestamp <= 0 {
+		return 1
+	}
+	return (maxTimestamp + 999) / 1000
+}
+
 func MaterializeMixedReplay(suite Suite, outDir string, durationSeconds int) (Workload, error) {
 	if durationSeconds <= 0 {
 		durationSeconds = suite.DurationMinutes * 60

@@ -2,3 +2,5 @@
 .venv/
 /lm-serve-bench
 out/
+tmp/
+__pycache__/

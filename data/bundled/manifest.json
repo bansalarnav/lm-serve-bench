@@ -7,7 +7,7 @@
       "kind": "trace",
       "workload": "prod-chat",
       "file": "data/bundled/traces/prod-chat.jsonl",
-      "notes": "High-variance 25-minute window from Azure conversation trace; exact timestamps and context-token lengths are preserved."
+      "notes": "High-variance 25-minute window from Azure conversation trace; exact timestamps and context-token lengths are preserved, with deterministic ShareGPT/WildChat prompt text paired by approximate input-token length."
     },
     {
       "id": "qwen-bailian",
@@ -21,7 +21,7 @@
       "kind": "trace",
       "workload": "rag-cache",
       "file": "data/bundled/traces/rag-cache.jsonl",
-      "notes": "10,476 real requests from a high-variance 25-minute Mooncake ArXiv production-trace window; source timestamps, input lengths, and cache block hashes are preserved."
+      "notes": "10,476 real requests from a high-variance 25-minute Mooncake ArXiv production-trace window; source timestamps, input lengths, and cache block hashes are preserved, with available RAGPulse-shaped prompt text paired by approximate input-token length."
     },
     {
       "id": "ragpulse",
@@ -35,7 +35,7 @@
       "kind": "trace",
       "workload": "code-repo",
       "file": "data/bundled/traces/code-repo.jsonl",
-      "notes": "High-variance 25-minute window from Azure code trace; exact timestamps and context-token lengths are preserved."
+      "notes": "High-variance 25-minute window from Azure code trace; exact timestamps and context-token lengths are preserved, with deterministic Blazedit/SWE-bench/BigCodeBench prompt text paired by approximate input-token length."
     },
     {
       "id": "swebench",
@@ -63,7 +63,7 @@
       "kind": "trace",
       "workload": "long-context",
       "file": "data/bundled/traces/long-context.jsonl",
-      "notes": "1,111 real requests from a high-variance 25-minute Mooncake ArXiv production-trace window, filtered to input lengths of at least 16k tokens. The window includes 395 requests at 30k+ tokens and 236 at 40k+ tokens, with source cache block hashes preserved."
+      "notes": "1,111 real requests from a high-variance 25-minute Mooncake ArXiv production-trace window, filtered to input lengths of at least 16k tokens. The window includes 395 requests at 30k+ tokens and 236 at 40k+ tokens, with source cache block hashes preserved and deterministic LongBench v2 prompt text paired by approximate input-token length."
     },
     {
       "id": "longbench",

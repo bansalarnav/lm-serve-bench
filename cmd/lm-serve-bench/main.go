@@ -196,6 +196,7 @@ func runBenchmark(args []string) {
 	suitePath := fs.String("suite", defaultSuitePath, "suite JSON file")
 	outDir := fs.String("out", "out/default", "prepared workload directory")
 	workloadID := fs.String("workload", "all", "workload id to run, or all for mixed replay")
+	mooncakeTrace := fs.String("mooncake-trace", "", "run this Mooncake-format trace JSONL instead of the bundled benchmark workloads")
 	model := fs.String("model", "Qwen/Qwen3-0.6B", "model name passed to AIPerf")
 	endpoint := fs.String("endpoint", "http://localhost:8000", "OpenAI-compatible endpoint base URL")
 	duration := fs.Duration("duration", 0, "override fixed trace replay duration per workload, for example 10m or 90s")
@@ -217,32 +218,34 @@ func runBenchmark(args []string) {
 		fail(err)
 	}
 	if err := executeSuite(executeOptions{
-		Suite:      suite,
-		OutDir:     *outDir,
-		WorkloadID: *workloadID,
-		Model:      *model,
-		Endpoint:   *endpoint,
-		Duration:   *duration,
-		Sweep:      *sweep,
-		TargetRPS:  *targetRPS,
-		RampSteps:  *rampSteps,
-		DryRun:     *dryRun,
+		Suite:         suite,
+		OutDir:        *outDir,
+		WorkloadID:    *workloadID,
+		MooncakeTrace: *mooncakeTrace,
+		Model:         *model,
+		Endpoint:      *endpoint,
+		Duration:      *duration,
+		Sweep:         *sweep,
+		TargetRPS:     *targetRPS,
+		RampSteps:     *rampSteps,
+		DryRun:        *dryRun,
 	}); err != nil {
 		fail(err)
 	}
 }
 
 type executeOptions struct {
-	Suite      bench.Suite
-	OutDir     string
-	WorkloadID string
-	Model      string
-	Endpoint   string
-	Duration   time.Duration
-	Sweep      string
-	TargetRPS  float64
-	RampSteps  int
-	DryRun     bool
+	Suite         bench.Suite
+	OutDir        string
+	WorkloadID    string
+	MooncakeTrace string
+	Model         string
+	Endpoint      string
+	Duration      time.Duration
+	Sweep         string
+	TargetRPS     float64
+	RampSteps     int
+	DryRun        bool
 }
 
 func executeSuite(opts executeOptions) error {
@@ -254,6 +257,9 @@ func executeSuite(opts executeOptions) error {
 	}
 	if opts.Endpoint == "" {
 		opts.Endpoint = "http://localhost:8000"
+	}
+	if opts.MooncakeTrace != "" {
+		return executeMooncakeTrace(opts)
 	}
 	if err := bench.MaterializeSuite(opts.Suite, opts.OutDir); err != nil {
 		return err
@@ -362,6 +368,66 @@ func executeSuite(opts executeOptions) error {
 	return nil
 }
 
+func executeMooncakeTrace(opts executeOptions) error {
+	if opts.WorkloadID != "" && opts.WorkloadID != "all" {
+		return fmt.Errorf("--mooncake-trace runs as custom-trace; do not combine it with --workload")
+	}
+	if opts.Sweep == "throughput" {
+		return fmt.Errorf("--mooncake-trace cannot be combined with --sweep throughput because throughput mode uses a random prompt pool, not trace replay")
+	}
+
+	workload, err := bench.MaterializeMooncakeTrace(opts.OutDir, opts.MooncakeTrace, opts.Suite.Sweeps)
+	if err != nil {
+		return err
+	}
+	workloadDir := filepath.Join(opts.OutDir, workload.ID)
+	if opts.Sweep == "" && opts.Duration > 0 {
+		if err := bench.ScaleWorkloadTraceDuration(workloadDir, int(opts.Duration.Seconds())); err != nil {
+			return err
+		}
+	}
+	if opts.Sweep == "rps" {
+		if err := bench.MaterializeRPSSweep(workloadDir, workload, opts.TargetRPS, opts.RampSteps); err != nil {
+			return err
+		}
+	}
+	scriptName, err := scriptForSweep(opts.Sweep)
+	if err != nil {
+		return err
+	}
+	script := filepath.Join(workloadDir, scriptName)
+	fmt.Fprintf(os.Stdout, "workload %s\n", workload.ID)
+	fmt.Fprintf(os.Stdout, "  %s\n", script)
+	if opts.DryRun {
+		return nil
+	}
+
+	cmd := exec.Command("sh", scriptName)
+	cmd.Dir = workloadDir
+	cmd.Env = append(os.Environ(),
+		"MODEL_NAME="+opts.Model,
+		"INFERENCE_URL="+opts.Endpoint,
+		"ARTIFACT_DIR="+filepath.Join("artifacts", workload.ID),
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s failed: %w", workload.ID, err)
+	}
+
+	summarySuite := opts.Suite
+	summarySuite.Workloads = []bench.Workload{workload}
+	summary, err := bench.SummarizeResults(summarySuite, opts.OutDir)
+	if err != nil {
+		return err
+	}
+	if err := bench.WriteSummaryFiles(summary, opts.OutDir); err != nil {
+		return err
+	}
+	fmt.Fprint(os.Stdout, bench.PrintTerminalSummary(summary))
+	return nil
+}
+
 func scriptForSweep(sweep string) (string, error) {
 	switch sweep {
 	case "":
@@ -379,7 +445,7 @@ func scriptForSweep(sweep string) (string, error) {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  lm-serve-bench run [--suite data/suites/default.json] [--out out/default] [--workload all] [--model Qwen/Qwen3-0.6B] [--endpoint http://localhost:8000] [--duration 25m] [--sweep load|throughput|rps] [--target-rps 100] [--ramp-steps 5] [--dry-run]
+  lm-serve-bench run [--suite data/suites/default.json] [--out out/default] [--workload all] [--mooncake-trace trace.jsonl] [--model Qwen/Qwen3-0.6B] [--endpoint http://localhost:8000] [--duration 25m] [--sweep load|throughput|rps] [--target-rps 100] [--ramp-steps 5] [--dry-run]
   lm-serve-bench mock-server [--addr 127.0.0.1:8000] [--token-delay 2ms]`)
 }
 
