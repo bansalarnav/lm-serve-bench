@@ -1,0 +1,256 @@
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+import pandas as pd
+
+
+def anonymous_id(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()[:16]
+
+
+def serialized_length(value: object) -> int | None:
+    if value is None:
+        return None
+    return len(json.dumps(value, ensure_ascii=False))
+
+
+def convert_codex_thread(path: Path) -> list[dict]:
+    records = []
+    with path.open() as file:
+        for line in file:
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    if not records:
+        return []
+
+    meta = next((r.get("payload", {}) for r in records if r.get("type") == "session_meta"), {})
+    raw_thread_id = str(meta.get("id") or meta.get("session_id") or path.name)
+    thread_id = anonymous_id(f"codex:{raw_thread_id}")
+    model = None
+    reasoning_effort = None
+    tool_names_by_call_id = {}
+    events = []
+
+    for event_index, record in enumerate(records):
+        record_type = record.get("type", "unknown")
+        payload = record.get("payload") or {}
+        payload_type = payload.get("type")
+
+        if record_type == "turn_context":
+            model = payload.get("model")
+            reasoning_effort = payload.get("effort")
+
+        tool_name = None
+        call_id = payload.get("call_id")
+        if record_type == "response_item" and payload_type in {"function_call", "custom_tool_call"}:
+            tool_name = payload.get("name")
+            if call_id and tool_name:
+                tool_names_by_call_id[call_id] = tool_name
+        elif call_id:
+            tool_name = tool_names_by_call_id.get(call_id)
+
+        role = payload.get("role") if payload_type == "message" else None
+        info = payload.get("info") or {}
+        usage = info.get("last_token_usage") or {}
+        total_usage = info.get("total_token_usage") or {}
+
+        success = None
+        if isinstance(payload.get("success"), bool):
+            success = payload["success"]
+        elif payload_type in {"function_call_output", "custom_tool_call_output"}:
+            success = True
+
+        status = None
+        if payload_type == "task_complete":
+            status = "completed"
+        elif payload_type == "turn_aborted":
+            status = "aborted"
+
+        content = payload.get("content")
+        if content is None:
+            content = payload.get("message")
+
+        tool_input = None
+        tool_output = None
+        if payload_type == "function_call":
+            tool_input = payload.get("arguments")
+        elif payload_type == "custom_tool_call":
+            tool_input = payload.get("input")
+        elif payload_type in {"function_call_output", "custom_tool_call_output"}:
+            tool_output = payload.get("output")
+
+        events.append(
+            {
+                "thread_id": thread_id,
+                "source": "codex",
+                "event_index": event_index,
+                "timestamp": record.get("timestamp"),
+                "role": role,
+                "event_type": f"{record_type}.{payload_type}" if payload_type else record_type,
+                "model": model,
+                "reasoning_effort": reasoning_effort,
+                "tool_name": tool_name,
+                "success": success,
+                "status": status,
+                "duration_ms": payload.get("duration_ms"),
+                "time_to_first_token_ms": payload.get("time_to_first_token_ms"),
+                "input_tokens": usage.get("input_tokens"),
+                "output_tokens": usage.get("output_tokens"),
+                "cached_input_tokens": usage.get("cached_input_tokens"),
+                "cache_creation_input_tokens": None,
+                "reasoning_output_tokens": usage.get("reasoning_output_tokens"),
+                "total_tokens": usage.get("total_tokens"),
+                "cumulative_input_tokens": total_usage.get("input_tokens"),
+                "cumulative_output_tokens": total_usage.get("output_tokens"),
+                "cumulative_cached_input_tokens": total_usage.get("cached_input_tokens"),
+                "cumulative_reasoning_output_tokens": total_usage.get("reasoning_output_tokens"),
+                "cumulative_total_tokens": total_usage.get("total_tokens"),
+                "model_context_window": info.get("model_context_window") or payload.get("model_context_window"),
+                "text_length": serialized_length(content),
+                "tool_input_length": serialized_length(tool_input),
+                "tool_output_length": serialized_length(tool_output),
+            }
+        )
+
+    return events
+
+
+def convert_claude_thread(path: Path) -> list[dict]:
+    records = []
+    with path.open() as file:
+        for line in file:
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    if not records:
+        return []
+
+    raw_thread_id = str(next((r.get("sessionId") for r in records if r.get("sessionId")), path.name))
+    thread_id = anonymous_id(f"claude:{raw_thread_id}")
+    tool_names_by_id = {}
+    events = []
+
+    for record in records:
+        record_type = record.get("type", "unknown")
+        message = record.get("message") or {}
+        role = message.get("role") if record_type in {"user", "assistant"} else None
+        model = message.get("model")
+        usage = message.get("usage") or {}
+        blocks = message.get("content")
+        if not isinstance(blocks, list) or not blocks:
+            blocks = [None]
+
+        for block_index, block in enumerate(blocks):
+            block = block if isinstance(block, dict) else {}
+            block_type = block.get("type")
+            tool_name = None
+            success = None
+            tool_input = None
+            tool_output = None
+            text = None
+
+            if block_type == "tool_use":
+                tool_name = block.get("name")
+                tool_input = block.get("input")
+                if block.get("id") and tool_name:
+                    tool_names_by_id[block["id"]] = tool_name
+            elif block_type == "tool_result":
+                tool_name = tool_names_by_id.get(block.get("tool_use_id"))
+                tool_output = block.get("content")
+                success = not block.get("is_error", False)
+            elif block_type == "text":
+                text = block.get("text")
+            elif block_type == "thinking":
+                text = block.get("thinking")
+
+            include_usage = block_index == 0 and bool(usage)
+            input_tokens = usage.get("input_tokens") if include_usage else None
+            output_tokens = usage.get("output_tokens") if include_usage else None
+            cached_tokens = usage.get("cache_read_input_tokens") if include_usage else None
+            cache_creation_tokens = usage.get("cache_creation_input_tokens") if include_usage else None
+            total_tokens = None
+            if include_usage:
+                total_tokens = sum(
+                    value or 0
+                    for value in (input_tokens, output_tokens, cached_tokens, cache_creation_tokens)
+                )
+
+            events.append(
+                {
+                    "thread_id": thread_id,
+                    "source": "claude",
+                    "event_index": len(events),
+                    "timestamp": record.get("timestamp"),
+                    "role": role,
+                    "event_type": f"{record_type}.{block_type}" if block_type else record_type,
+                    "model": model,
+                    "reasoning_effort": None,
+                    "tool_name": tool_name,
+                    "success": success,
+                    "status": None,
+                    "duration_ms": None,
+                    "time_to_first_token_ms": None,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cached_input_tokens": cached_tokens,
+                    "cache_creation_input_tokens": cache_creation_tokens,
+                    "reasoning_output_tokens": None,
+                    "total_tokens": total_tokens,
+                    "cumulative_input_tokens": None,
+                    "cumulative_output_tokens": None,
+                    "cumulative_cached_input_tokens": None,
+                    "cumulative_reasoning_output_tokens": None,
+                    "cumulative_total_tokens": None,
+                    "model_context_window": None,
+                    "text_length": serialized_length(text),
+                    "tool_input_length": serialized_length(tool_input),
+                    "tool_output_length": serialized_length(tool_output),
+                }
+            )
+
+    return events
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Convert Codex and Claude Code sessions to one metadata-only Parquet file.")
+    parser.add_argument(
+        "--codex-input",
+        type=Path,
+        default=Path.home() / ".codex" / "sessions",
+        help="Codex sessions directory",
+    )
+    parser.add_argument(
+        "--claude-input",
+        type=Path,
+        default=Path.home() / ".claude" / "projects",
+        help="Claude Code projects directory",
+    )
+    parser.add_argument("--output", type=Path, default=Path("sanitized") / "threads.parquet")
+    args = parser.parse_args()
+
+    all_events = []
+    codex_paths = [args.codex_input] if args.codex_input.is_file() else sorted(args.codex_input.rglob("*.jsonl"))
+    claude_paths = [args.claude_input] if args.claude_input.is_file() else sorted(args.claude_input.rglob("*.jsonl"))
+
+    for path in codex_paths:
+        all_events.extend(convert_codex_thread(path))
+    for path in claude_paths:
+        all_events.extend(convert_claude_thread(path))
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(all_events).to_parquet(args.output, index=False)
+    print(
+        f"Converted {len(codex_paths)} Codex threads and {len(claude_paths)} Claude threads "
+        f"({len(all_events)} events) into {args.output}"
+    )
+
+
+if __name__ == "__main__":
+    main()
