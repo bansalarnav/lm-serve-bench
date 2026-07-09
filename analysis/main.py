@@ -10,6 +10,12 @@ def anonymous_id(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:16]
 
 
+def anonymous_id_or_none(namespace: str, value: object) -> str | None:
+    if value is None:
+        return None
+    return anonymous_id(f"{namespace}:{value}")
+
+
 def serialized_length(value: object) -> int | None:
     if value is None:
         return None
@@ -31,6 +37,10 @@ def convert_codex_thread(path: Path) -> list[dict]:
     meta = next((r.get("payload", {}) for r in records if r.get("type") == "session_meta"), {})
     raw_thread_id = str(meta.get("id") or meta.get("session_id") or path.name)
     thread_id = anonymous_id(f"codex:{raw_thread_id}")
+    parent_thread_id = anonymous_id_or_none("codex", meta.get("parent_thread_id") or meta.get("forked_from_id"))
+    thread_source = meta.get("thread_source")
+    source = meta.get("source") or {}
+    is_sidechain = (isinstance(source, dict) and bool(source.get("subagent"))) or thread_source == "subagent"
     model = None
     reasoning_effort = None
     tool_names_by_call_id = {}
@@ -44,6 +54,20 @@ def convert_codex_thread(path: Path) -> list[dict]:
         if record_type == "turn_context":
             model = payload.get("model")
             reasoning_effort = payload.get("effort")
+
+        event_id = anonymous_id_or_none("codex-event", payload.get("id") or payload.get("turn_id"))
+        event_parent_id = None
+        if payload.get("parent_thread_id") or payload.get("forked_from_id"):
+            event_parent_id = anonymous_id_or_none(
+                "codex",
+                payload.get("parent_thread_id") or payload.get("forked_from_id"),
+            )
+        if payload.get("sender_thread_id"):
+            event_parent_id = anonymous_id_or_none("codex", payload.get("sender_thread_id"))
+
+        child_thread_id = None
+        if payload_type == "collab_agent_spawn_end":
+            child_thread_id = anonymous_id_or_none("codex", payload.get("new_thread_id"))
 
         tool_name = None
         call_id = payload.get("call_id")
@@ -90,10 +114,21 @@ def convert_codex_thread(path: Path) -> list[dict]:
                 "source": "codex",
                 "event_index": event_index,
                 "timestamp": record.get("timestamp"),
+                "event_id": event_id,
+                "parent_event_id": None,
+                "parent_thread_id": event_parent_id or parent_thread_id,
+                "child_thread_id": child_thread_id,
+                "agent_id": thread_id if is_sidechain else None,
+                "agent_role": payload.get("new_agent_role") or payload.get("agent_role"),
+                "is_sidechain": is_sidechain,
+                "source_tool_assistant_id": None,
+                "prompt_id": None,
+                "request_id": None,
+                "tool_call_id": anonymous_id_or_none("codex-tool", call_id),
                 "role": role,
                 "event_type": f"{record_type}.{payload_type}" if payload_type else record_type,
-                "model": model,
-                "reasoning_effort": reasoning_effort,
+                "model": payload.get("model") or model,
+                "reasoning_effort": payload.get("reasoning_effort") or reasoning_effort,
                 "tool_name": tool_name,
                 "success": success,
                 "status": status,
@@ -144,6 +179,15 @@ def convert_claude_thread(path: Path) -> list[dict]:
         model = message.get("model")
         usage = message.get("usage") or {}
         blocks = message.get("content")
+        event_id = anonymous_id_or_none("claude-event", record.get("uuid") or message.get("id"))
+        parent_event_id = anonymous_id_or_none(
+            "claude-event",
+            record.get("parentUuid") or record.get("logicalParentUuid"),
+        )
+        agent_id = anonymous_id_or_none("claude-agent", record.get("agentId") or record.get("attributionAgent"))
+        source_tool_assistant_id = anonymous_id_or_none("claude-event", record.get("sourceToolAssistantUUID"))
+        prompt_id = anonymous_id_or_none("claude-prompt", record.get("promptId"))
+        request_id = anonymous_id_or_none("claude-request", record.get("requestId"))
         if not isinstance(blocks, list) or not blocks:
             blocks = [None]
 
@@ -188,6 +232,17 @@ def convert_claude_thread(path: Path) -> list[dict]:
                     "source": "claude",
                     "event_index": len(events),
                     "timestamp": record.get("timestamp"),
+                    "event_id": event_id,
+                    "parent_event_id": parent_event_id,
+                    "parent_thread_id": None,
+                    "child_thread_id": None,
+                    "agent_id": agent_id,
+                    "agent_role": None,
+                    "is_sidechain": record.get("isSidechain"),
+                    "source_tool_assistant_id": source_tool_assistant_id,
+                    "prompt_id": prompt_id,
+                    "request_id": request_id,
+                    "tool_call_id": anonymous_id_or_none("claude-tool", block.get("id") or block.get("tool_use_id")),
                     "role": role,
                     "event_type": f"{record_type}.{block_type}" if block_type else record_type,
                     "model": model,
