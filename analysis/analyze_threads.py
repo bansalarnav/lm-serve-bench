@@ -298,6 +298,13 @@ def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.D
         if pd.isna(duration_ms) and pd.notna(start) and pd.notna(end):
             duration_ms = (end - start).total_seconds() * 1000
 
+        # Timestamp of the model's last emitted token. For codex, end_time is the
+        # terminal task_complete/turn_aborted event, which lands after the final
+        # assistant message; last_output_time is that final message instead.
+        last_output_time = assistant["timestamp"].max()
+        if pd.isna(last_output_time):
+            last_output_time = end
+
         ttft = group["time_to_first_token_ms"].dropna()
         run_rows.append(
             {
@@ -312,6 +319,7 @@ def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.D
                 "is_sidechain": bool(prompt_rows["is_sidechain"].any()),
                 "start_time": start,
                 "end_time": end,
+                "last_output_time": last_output_time,
                 "duration_seconds": duration_ms / 1000 if pd.notna(duration_ms) else np.nan,
                 "duration_source": duration_source,
                 "time_to_first_token_seconds": ttft.iloc[-1] / 1000 if not ttft.empty else np.nan,
@@ -384,6 +392,36 @@ def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.D
         runs["output_tokens"], runs["duration_seconds"]
     )
     return runs.sort_values("start_time", kind="stable").reset_index(drop=True)
+
+
+def build_response_gaps(runs: pd.DataFrame) -> pd.DataFrame:
+    """Idle time between the model's last output token and the next user message.
+
+    Within a thread stream each run ends when the model emits its last token
+    (last_output_time) and the next run begins when the user sends their next
+    message (start_time); the gap between them is the user's think/away time
+    between turns. Sidechain (subagent) runs are not user turns, so they are
+    excluded before pairing consecutive runs.
+    """
+    ordered = runs[~runs["is_sidechain"]].sort_values(
+        ["source", "thread_id", "stream_id", "run_number"], kind="stable"
+    )
+    grouped = ordered.groupby(["source", "thread_id", "stream_id"], sort=False)
+    next_start = grouped["start_time"].shift(-1)
+    next_run_id = grouped["run_id"].shift(-1)
+    gaps = pd.DataFrame(
+        {
+            "source": ordered["source"].to_numpy(),
+            "thread_id": ordered["thread_id"].to_numpy(),
+            "stream_id": ordered["stream_id"].to_numpy(),
+            "from_run_id": ordered["run_id"].to_numpy(),
+            "to_run_id": next_run_id.to_numpy(),
+            "last_output_time": ordered["last_output_time"].to_numpy(),
+            "next_prompt_time": next_start.to_numpy(),
+            "gap_seconds": (next_start - ordered["last_output_time"]).dt.total_seconds().to_numpy(),
+        }
+    )
+    return gaps[gaps["gap_seconds"].notna()].reset_index(drop=True)
 
 
 def build_threads(
@@ -527,8 +565,11 @@ def summarize(events: pd.DataFrame, runs: pd.DataFrame, threads: pd.DataFrame) -
     return pd.DataFrame(rows)
 
 
-def distribution_summary(runs: pd.DataFrame, threads: pd.DataFrame) -> pd.DataFrame:
+def distribution_summary(
+    runs: pd.DataFrame, threads: pd.DataFrame, response_gaps: pd.DataFrame
+) -> pd.DataFrame:
     datasets = {
+        "response_gap": (response_gaps, ["gap_seconds"]),
         "run": (
             runs,
             [
@@ -585,6 +626,33 @@ def distribution_summary(runs: pd.DataFrame, threads: pd.DataFrame) -> pd.DataFr
                     }
                 )
     return pd.DataFrame(rows)
+
+
+def plot_ecdf(frame: pd.DataFrame, column: str, title: str, xlabel: str, path: Path, log_x=False):
+    """Empirical CDF per source. Complements the histograms: the histogram shows
+    distribution shape, the ECDF makes percentiles and cross-source stochastic
+    dominance easy to read off directly.
+    """
+    fig, ax = plt.subplots(figsize=(8, 5))
+    groups = [("all", frame), *list(frame.groupby("source"))]
+    for source, group in groups:
+        values = group[column].replace([np.inf, -np.inf], np.nan).dropna()
+        if log_x:
+            values = values[values.gt(0)]
+        values = np.sort(values.to_numpy())
+        if len(values):
+            style = {"color": "black", "linestyle": "--", "linewidth": 1.5} if source == "all" else {}
+            ax.plot(values, np.arange(1, len(values) + 1) / len(values), label=source, **style)
+    if log_x:
+        ax.set_xscale("log")
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Fraction of observations ≤ x")
+    ax.grid(alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
 
 
 def _draw_hist(ax, frame, column, bins, clip_upper=None, log_x=False):
@@ -668,6 +736,7 @@ def make_plots(
     threads: pd.DataFrame,
     model_calls: pd.DataFrame,
     tool_calls: pd.DataFrame,
+    response_gaps: pd.DataFrame,
     output_dir: Path,
 ) -> None:
     plot_log_hist(
@@ -677,6 +746,29 @@ def make_plots(
         "Duration (seconds, log scale)",
         output_dir / "run_duration_hist.png",
     )
+    plot_ecdf(
+        runs,
+        "duration_seconds",
+        "Agent run duration",
+        "Duration (seconds, log scale)",
+        output_dir / "run_duration_ecdf.png",
+        log_x=True,
+    )
+    plot_log_hist(
+        response_gaps,
+        "gap_seconds",
+        "Idle time from last model token to next user message",
+        "Seconds (log scale)",
+        output_dir / "response_gap_hist.png",
+    )
+    plot_ecdf(
+        response_gaps,
+        "gap_seconds",
+        "Idle time from last model token to next user message",
+        "Seconds (log scale)",
+        output_dir / "response_gap_ecdf.png",
+        log_x=True,
+    )
     plot_count_hist(
         runs,
         "tool_calls",
@@ -684,12 +776,26 @@ def make_plots(
         "Tool calls",
         output_dir / "tool_calls_per_run_hist.png",
     )
+    plot_ecdf(
+        runs,
+        "tool_calls",
+        "Tool calls per run",
+        "Tool calls",
+        output_dir / "tool_calls_per_run_ecdf.png",
+    )
     plot_count_hist(
         threads,
         "user_messages",
         "User-role prompts per thread",
         "User-role prompts",
         output_dir / "user_messages_per_thread_hist.png",
+    )
+    plot_ecdf(
+        threads,
+        "user_messages",
+        "User-role prompts per thread",
+        "User-role prompts",
+        output_dir / "user_messages_per_thread_ecdf.png",
     )
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
@@ -860,13 +966,15 @@ def main() -> None:
     tool_calls = build_tool_calls(events)
     runs = build_runs(events, model_calls, tool_calls)
     threads = build_threads(events, runs, model_calls, tool_calls)
+    response_gaps = build_response_gaps(runs)
     summary = summarize(events, runs, threads)
-    distributions = distribution_summary(runs, threads)
+    distributions = distribution_summary(runs, threads, response_gaps)
 
     summary.to_csv(args.output_dir / "summary.csv", index=False)
     distributions.to_csv(args.output_dir / "distribution_summary.csv", index=False)
     runs.to_csv(args.output_dir / "runs.csv", index=False)
     threads.to_csv(args.output_dir / "threads.csv", index=False)
+    response_gaps.to_csv(args.output_dir / "response_gaps.csv", index=False)
     model_calls.to_csv(args.output_dir / "model_calls.csv", index=False)
     tool_calls.to_csv(args.output_dir / "tool_calls.csv", index=False)
 
@@ -934,7 +1042,7 @@ def main() -> None:
     )
     data_quality.to_csv(args.output_dir / "data_quality.csv", index=False)
 
-    make_plots(runs, threads, model_calls, tool_calls, args.output_dir)
+    make_plots(runs, threads, model_calls, tool_calls, response_gaps, args.output_dir)
 
     with pd.option_context("display.max_columns", None, "display.width", 220):
         print(summary.round(3).to_string(index=False))
