@@ -22,7 +22,29 @@ def serialized_length(value: object) -> int | None:
     return len(json.dumps(value, ensure_ascii=False))
 
 
-def convert_codex_thread(path: Path) -> list[dict]:
+def run_summary(
+    *,
+    source: str,
+    path: Path,
+    thread_id: str,
+    records: list[dict],
+    event_count: int,
+) -> dict:
+    timestamps = [record.get("timestamp") for record in records if record.get("timestamp")]
+    return {
+        "run_id": anonymous_id(f"{source}-run:{path}"),
+        "source": source,
+        "thread_id": thread_id,
+        "path_id": anonymous_id(f"{source}-path:{path}"),
+        "file_name": path.name,
+        "record_count": len(records),
+        "event_count": event_count,
+        "first_timestamp": min(timestamps) if timestamps else None,
+        "last_timestamp": max(timestamps) if timestamps else None,
+    }
+
+
+def convert_codex_thread(path: Path) -> tuple[list[dict], dict | None]:
     records = []
     with path.open() as file:
         for line in file:
@@ -32,11 +54,12 @@ def convert_codex_thread(path: Path) -> list[dict]:
                 continue
 
     if not records:
-        return []
+        return [], None
 
     meta = next((r.get("payload", {}) for r in records if r.get("type") == "session_meta"), {})
     raw_thread_id = str(meta.get("id") or meta.get("session_id") or path.name)
     thread_id = anonymous_id(f"codex:{raw_thread_id}")
+    run_id = anonymous_id(f"codex-run:{path}")
     parent_thread_id = anonymous_id_or_none("codex", meta.get("parent_thread_id") or meta.get("forked_from_id"))
     thread_source = meta.get("thread_source")
     source = meta.get("source") or {}
@@ -108,11 +131,34 @@ def convert_codex_thread(path: Path) -> list[dict]:
         elif payload_type in {"function_call_output", "custom_tool_call_output"}:
             tool_output = payload.get("output")
 
+        event_type = f"{record_type}.{payload_type}" if payload_type else record_type
+        is_user_prompt = event_type == "response_item.message" and role == "user"
+        is_assistant_message = event_type == "response_item.message" and role == "assistant"
+        is_tool_call = event_type in {
+            "response_item.function_call",
+            "response_item.custom_tool_call",
+            "response_item.web_search_call",
+            "response_item.image_generation_call",
+        }
+        is_tool_result = event_type in {
+            "response_item.function_call_output",
+            "response_item.custom_tool_call_output",
+        }
+        tool_event_stage = None
+        if is_tool_call:
+            tool_event_stage = "call"
+        elif is_tool_result:
+            tool_event_stage = "result"
+        elif event_type.startswith("event_msg.") and event_type.endswith("_end"):
+            tool_event_stage = "runtime_end"
+
         events.append(
             {
                 "thread_id": thread_id,
                 "source": "codex",
-                "event_index": event_index,
+                "run_id": run_id,
+                "run_event_index": event_index,
+                "event_index": None,
                 "timestamp": record.get("timestamp"),
                 "event_id": event_id,
                 "parent_event_id": None,
@@ -126,7 +172,23 @@ def convert_codex_thread(path: Path) -> list[dict]:
                 "request_id": None,
                 "tool_call_id": anonymous_id_or_none("codex-tool", call_id),
                 "role": role,
-                "event_type": f"{record_type}.{payload_type}" if payload_type else record_type,
+                "event_type": event_type,
+                "canonical_event_type": (
+                    "user_prompt"
+                    if is_user_prompt
+                    else "assistant_message"
+                    if is_assistant_message
+                    else "tool_call"
+                    if is_tool_call
+                    else "tool_result"
+                    if is_tool_result
+                    else "other"
+                ),
+                "is_user_prompt": is_user_prompt,
+                "is_assistant_message": is_assistant_message,
+                "is_tool_call": is_tool_call,
+                "is_tool_result": is_tool_result,
+                "tool_event_stage": tool_event_stage,
                 "model": payload.get("model") or model,
                 "reasoning_effort": payload.get("reasoning_effort") or reasoning_effort,
                 "tool_name": tool_name,
@@ -152,10 +214,10 @@ def convert_codex_thread(path: Path) -> list[dict]:
             }
         )
 
-    return events
+    return events, run_summary(source="codex", path=path, thread_id=thread_id, records=records, event_count=len(events))
 
 
-def convert_claude_thread(path: Path) -> list[dict]:
+def convert_claude_thread(path: Path) -> tuple[list[dict], dict | None]:
     records = []
     with path.open() as file:
         for line in file:
@@ -165,14 +227,15 @@ def convert_claude_thread(path: Path) -> list[dict]:
                 continue
 
     if not records:
-        return []
+        return [], None
 
     raw_thread_id = str(next((r.get("sessionId") for r in records if r.get("sessionId")), path.name))
     thread_id = anonymous_id(f"claude:{raw_thread_id}")
+    run_id = anonymous_id(f"claude-run:{path}")
     tool_names_by_id = {}
     events = []
 
-    for record in records:
+    for record_index, record in enumerate(records):
         record_type = record.get("type", "unknown")
         message = record.get("message") or {}
         role = message.get("role") if record_type in {"user", "assistant"} else None
@@ -214,6 +277,17 @@ def convert_claude_thread(path: Path) -> list[dict]:
             elif block_type == "thinking":
                 text = block.get("thinking")
 
+            event_type = f"{record_type}.{block_type}" if block_type else record_type
+            is_user_prompt = event_type == "user.text"
+            is_assistant_message = event_type == "assistant.text"
+            is_tool_call = event_type == "assistant.tool_use"
+            is_tool_result = event_type == "user.tool_result"
+            tool_event_stage = None
+            if is_tool_call:
+                tool_event_stage = "call"
+            elif is_tool_result:
+                tool_event_stage = "result"
+
             include_usage = block_index == 0 and bool(usage)
             input_tokens = usage.get("input_tokens") if include_usage else None
             output_tokens = usage.get("output_tokens") if include_usage else None
@@ -230,7 +304,11 @@ def convert_claude_thread(path: Path) -> list[dict]:
                 {
                     "thread_id": thread_id,
                     "source": "claude",
-                    "event_index": len(events),
+                    "run_id": run_id,
+                    "run_event_index": len(events),
+                    "record_index": record_index,
+                    "block_index": block_index,
+                    "event_index": None,
                     "timestamp": record.get("timestamp"),
                     "event_id": event_id,
                     "parent_event_id": parent_event_id,
@@ -244,7 +322,23 @@ def convert_claude_thread(path: Path) -> list[dict]:
                     "request_id": request_id,
                     "tool_call_id": anonymous_id_or_none("claude-tool", block.get("id") or block.get("tool_use_id")),
                     "role": role,
-                    "event_type": f"{record_type}.{block_type}" if block_type else record_type,
+                    "event_type": event_type,
+                    "canonical_event_type": (
+                        "user_prompt"
+                        if is_user_prompt
+                        else "assistant_message"
+                        if is_assistant_message
+                        else "tool_call"
+                        if is_tool_call
+                        else "tool_result"
+                        if is_tool_result
+                        else "other"
+                    ),
+                    "is_user_prompt": is_user_prompt,
+                    "is_assistant_message": is_assistant_message,
+                    "is_tool_call": is_tool_call,
+                    "is_tool_result": is_tool_result,
+                    "tool_event_stage": tool_event_stage,
                     "model": model,
                     "reasoning_effort": None,
                     "tool_name": tool_name,
@@ -270,7 +364,7 @@ def convert_claude_thread(path: Path) -> list[dict]:
                 }
             )
 
-    return events
+    return events, run_summary(source="claude", path=path, thread_id=thread_id, records=records, event_count=len(events))
 
 
 def main() -> None:
@@ -288,23 +382,59 @@ def main() -> None:
         help="Claude Code projects directory",
     )
     parser.add_argument("--output", type=Path, default=Path("sanitized") / "threads.parquet")
+    parser.add_argument("--runs-output", type=Path, default=Path("sanitized") / "runs.parquet")
     args = parser.parse_args()
 
     all_events = []
+    runs = []
     codex_paths = [args.codex_input] if args.codex_input.is_file() else sorted(args.codex_input.rglob("*.jsonl"))
     claude_paths = [args.claude_input] if args.claude_input.is_file() else sorted(args.claude_input.rglob("*.jsonl"))
 
     for path in codex_paths:
-        all_events.extend(convert_codex_thread(path))
+        events, run = convert_codex_thread(path)
+        all_events.extend(events)
+        if run:
+            runs.append(run)
     for path in claude_paths:
-        all_events.extend(convert_claude_thread(path))
+        events, run = convert_claude_thread(path)
+        all_events.extend(events)
+        if run:
+            runs.append(run)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(all_events).to_parquet(args.output, index=False)
+    events_df = pd.DataFrame(all_events)
+    if not events_df.empty:
+        events_df = events_df.sort_values(
+            ["source", "thread_id", "timestamp", "run_id", "run_event_index"],
+            na_position="last",
+        ).reset_index(drop=True)
+        events_df["event_index"] = events_df.groupby(["source", "thread_id"]).cumcount()
+        events_df["row_id"] = [
+            anonymous_id(f"row:{source}:{run_id}:{run_event_index}")
+            for source, run_id, run_event_index in zip(
+                events_df["source"],
+                events_df["run_id"],
+                events_df["run_event_index"],
+                strict=False,
+            )
+        ]
+
+    runs_df = pd.DataFrame(runs)
+    if not runs_df.empty and not events_df.empty:
+        run_bounds = (
+            events_df.groupby("run_id")["event_index"]
+            .agg(first_event_index="min", last_event_index="max")
+            .reset_index()
+        )
+        runs_df = runs_df.merge(run_bounds, on="run_id", how="left")
+
+    events_df.to_parquet(args.output, index=False)
+    runs_df.to_parquet(args.runs_output, index=False)
     print(
         f"Converted {len(codex_paths)} Codex threads and {len(claude_paths)} Claude threads "
         f"({len(all_events)} events) into {args.output}"
     )
+    print(f"Wrote {len(runs)} run summaries into {args.runs_output}")
 
 
 if __name__ == "__main__":
