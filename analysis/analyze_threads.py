@@ -587,23 +587,76 @@ def distribution_summary(runs: pd.DataFrame, threads: pd.DataFrame) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
-def plot_ecdf(frame: pd.DataFrame, column: str, title: str, xlabel: str, path: Path, log_x=False):
-    fig, ax = plt.subplots(figsize=(8, 5))
-    groups = [("all", frame), *list(frame.groupby("source"))]
-    for source, group in groups:
-        values = group[column].replace([np.inf, -np.inf], np.nan).dropna()
+def _draw_hist(ax, frame, column, bins, clip_upper=None, log_x=False):
+    """Overlay a per-source histogram normalized to each source's own fraction.
+
+    Sources differ hugely in sample size (e.g. codex has ~10x claude's runs), so
+    raw counts bury the smaller source. Normalizing each source to a fraction of
+    its own observations makes the shapes directly comparable.
+    """
+    for source in sorted(frame["source"].dropna().unique()):
+        values = frame.loc[frame["source"].eq(source), column]
+        values = values.replace([np.inf, -np.inf], np.nan).dropna()
         if log_x:
             values = values[values.gt(0)]
-        values = np.sort(values.to_numpy())
-        if len(values):
-            style = {"color": "black", "linestyle": "--", "linewidth": 1.5} if source == "all" else {}
-            ax.plot(values, np.arange(1, len(values) + 1) / len(values), label=source, **style)
-    if log_x:
-        ax.set_xscale("log")
+        if clip_upper is not None:
+            values = values.clip(upper=clip_upper)
+        if values.empty:
+            continue
+        weights = np.ones(len(values)) / len(values)
+        ax.hist(values, bins=bins, weights=weights, alpha=0.55, label=source)
+
+
+def plot_count_hist(
+    frame: pd.DataFrame, column: str, title: str, xlabel: str, path: Path
+):
+    """Histogram for small-integer count distributions, grouped by source.
+
+    A CDF hides the shape of these (mode, skew, spikes at 0/1); a frequency
+    histogram over integer bins makes it legible.
+    """
+    values = frame[column].replace([np.inf, -np.inf], np.nan).dropna()
+    if values.empty:
+        return
+    upper = int(np.ceil(percentile(values, 0.99))) if len(values) > 1 else int(values.max())
+    upper = max(upper, 1)
+    bins = np.arange(0, upper + 2) - 0.5  # one integer per bin, centered on the tick
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    _draw_hist(ax, frame, column, bins, clip_upper=upper)
+    ax.set_title(title)
+    ax.set_xlabel(f"{xlabel} (≥{upper} grouped into the last bin)")
+    ax.set_ylabel("Fraction of that source")
+    if upper <= 30:
+        ax.set_xticks(np.arange(0, upper + 1))
+    ax.grid(alpha=0.25, axis="y")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def plot_log_hist(
+    frame: pd.DataFrame, column: str, title: str, xlabel: str, path: Path
+):
+    """Histogram for a positive, heavy-tailed continuous metric (e.g. duration).
+
+    Log-spaced bins on a log x-axis so the bulk and the long tail are both
+    visible; normalized per source for cross-source comparison.
+    """
+    values = frame[column].replace([np.inf, -np.inf], np.nan).dropna()
+    values = values[values.gt(0)]
+    if values.empty:
+        return
+    bins = np.logspace(np.log10(values.min()), np.log10(values.max()), 40)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    _draw_hist(ax, frame, column, bins, log_x=True)
+    ax.set_xscale("log")
     ax.set_title(title)
     ax.set_xlabel(xlabel)
-    ax.set_ylabel("Fraction of observations ≤ x")
-    ax.grid(alpha=0.25)
+    ax.set_ylabel("Fraction of that source")
+    ax.grid(alpha=0.25, axis="y")
     ax.legend()
     fig.tight_layout()
     fig.savefig(path, dpi=160)
@@ -617,27 +670,26 @@ def make_plots(
     tool_calls: pd.DataFrame,
     output_dir: Path,
 ) -> None:
-    plot_ecdf(
+    plot_log_hist(
         runs,
         "duration_seconds",
         "Agent run duration",
         "Duration (seconds, log scale)",
-        output_dir / "run_duration_ecdf.png",
-        log_x=True,
+        output_dir / "run_duration_hist.png",
     )
-    plot_ecdf(
+    plot_count_hist(
         runs,
         "tool_calls",
         "Tool calls per run",
         "Tool calls",
-        output_dir / "tool_calls_per_run_ecdf.png",
+        output_dir / "tool_calls_per_run_hist.png",
     )
-    plot_ecdf(
+    plot_count_hist(
         threads,
         "user_messages",
         "User-role prompts per thread",
         "User-role prompts",
-        output_dir / "user_messages_per_thread_ecdf.png",
+        output_dir / "user_messages_per_thread_hist.png",
     )
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
