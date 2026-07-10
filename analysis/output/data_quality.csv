@@ -1,0 +1,9 @@
+check,value
+events,85911
+invalid_timestamps,1077
+threads_without_canonical_user_prompt,11
+model_calls_before_first_prompt,0
+tool_calls_before_first_prompt,0
+runs_with_collapsed_timestamps,11
+runs_without_usable_duration,11
+duplicate_thread_event_indexes,0
