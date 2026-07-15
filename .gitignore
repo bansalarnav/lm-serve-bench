@@ -5,3 +5,4 @@ out/
 ref/
 tmp/
 __pycache__/
+/analysis/report/

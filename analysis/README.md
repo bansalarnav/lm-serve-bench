@@ -83,3 +83,24 @@ Codex emits repeated token snapshots. The script calculates increments from cumu
 Reasoning tokens are a subset of total output tokens. `reasoning_share_of_output` is `reasoning_output_tokens / output_tokens`, and `non_reasoning_output_tokens` is the remainder. This parquet only exposes separate reasoning-token counts for Codex; Claude values remain blank and `reasoning_tokens_available` is false rather than incorrectly treating missing data as zero.
 
 `end_to_end_output_tokens_per_second` includes reasoning, tool execution, and orchestration time. It is useful as a session-level efficiency measure, but it is not model decode throughput.
+
+## Offline HTML report
+
+`generate_report.py` runs the sanitizer and analyzer together, then creates a local dashboard with the charts, headline tables, and readable transcripts:
+
+```bash
+uv run --project analysis analysis/generate_report.py --open
+```
+
+The report is written to `analysis/report/index.html` by default. It has no network dependencies. Transcript links are relative HTML links, and both JSONL input and HTML output use UTF-8 explicitly, so the report can be moved and opened on Windows, macOS, or Linux.
+
+Custom inputs and output directory:
+
+```bash
+uv run --project analysis analysis/generate_report.py \
+  --codex-input /path/to/codex/sessions \
+  --claude-input /path/to/claude/projects \
+  --output-dir /path/to/report
+```
+
+The report contains the original transcript text and tool details. Treat the whole report directory as private; the Parquet and CSV files under `data/` remain metadata-only.

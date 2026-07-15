@@ -46,7 +46,7 @@ def run_summary(
 
 def convert_codex_thread(path: Path) -> tuple[list[dict], dict | None]:
     records = []
-    with path.open() as file:
+    with path.open(encoding="utf-8", errors="replace") as file:
         for line in file:
             try:
                 records.append(json.loads(line))
@@ -219,7 +219,7 @@ def convert_codex_thread(path: Path) -> tuple[list[dict], dict | None]:
 
 def convert_claude_thread(path: Path) -> tuple[list[dict], dict | None]:
     records = []
-    with path.open() as file:
+    with path.open(encoding="utf-8", errors="replace") as file:
         for line in file:
             try:
                 records.append(json.loads(line))
