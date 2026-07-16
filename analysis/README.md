@@ -1,15 +1,16 @@
 # Thread dataset
 
-Run the sanitizer:
+Generate and open the HTML report in one go:
 
 ```bash
-uv run python gather_session_data.py
+uv run main.py --open
 ```
 
 Outputs:
 
 - `sanitized/threads.parquet`: event-level metadata from Codex and Claude Code.
 - `sanitized/runs.parquet`: one row per source JSONL file/export segment.
+- `outputs/` - Directory with plots and HTML report
 
 Important columns in `threads.parquet`:
 
