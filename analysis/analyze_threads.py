@@ -1,6 +1,9 @@
 import argparse
 from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -944,24 +947,10 @@ def make_plots(
     (output_dir / "daily_load.png").unlink(missing_ok=True)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Analyze Codex and Claude coding-agent event threads.")
-    parser.add_argument(
-        "--input",
-        type=Path,
-        default=Path(__file__).parent / "sanitized" / "threads.parquet",
-        help="Input event parquet",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path(__file__).parent / "output",
-        help="Directory for CSV tables and PNG plots",
-    )
-    args = parser.parse_args()
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+def analyze_threads(input_path: Path, output_dir: Path) -> pd.DataFrame:
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    events = load_events(args.input)
+    events = load_events(input_path)
     model_calls = build_model_calls(events)
     tool_calls = build_tool_calls(events)
     runs = build_runs(events, model_calls, tool_calls)
@@ -970,19 +959,20 @@ def main() -> None:
     summary = summarize(events, runs, threads)
     distributions = distribution_summary(runs, threads, response_gaps)
 
-    summary.to_csv(args.output_dir / "summary.csv", index=False)
-    distributions.to_csv(args.output_dir / "distribution_summary.csv", index=False)
-    runs.to_csv(args.output_dir / "runs.csv", index=False)
-    threads.to_csv(args.output_dir / "threads.csv", index=False)
-    response_gaps.to_csv(args.output_dir / "response_gaps.csv", index=False)
-    model_calls.to_csv(args.output_dir / "model_calls.csv", index=False)
-    tool_calls.to_csv(args.output_dir / "tool_calls.csv", index=False)
+    summary.to_csv(output_dir / "summary.csv", index=False)
+    distributions.to_csv(output_dir / "distribution_summary.csv", index=False)
+    runs.to_csv(output_dir / "runs.csv", index=False)
+    threads.to_csv(output_dir / "threads.csv", index=False)
+    response_gaps.to_csv(output_dir / "response_gaps.csv", index=False)
+    model_calls.to_csv(output_dir / "model_calls.csv", index=False)
+    tool_calls.to_csv(output_dir / "tool_calls.csv", index=False)
 
     model_usage = model_calls.copy()
     model_usage["model"] = model_usage["model"].fillna("unknown")
     model_usage = model_usage.groupby(["source", "model"], as_index=False).agg(
         calls=("model", "size"),
         served_input_tokens=("served_input_tokens", "sum"),
+        uncached_input_tokens=("uncached_input_tokens", "sum"),
         cached_input_tokens=("cached_input_tokens", "sum"),
         cache_creation_input_tokens=("cache_creation_input_tokens", "sum"),
         output_tokens=("output_tokens", "sum"),
@@ -1005,8 +995,8 @@ def main() -> None:
     model_usage["reasoning_share_of_output"] = safe_ratio(
         model_usage["reasoning_output_tokens"], model_usage["output_tokens"]
     )
-    model_usage.sort_values(["source", "calls"], ascending=[True, False]).to_csv(
-        args.output_dir / "model_usage.csv", index=False
+    model_usage.sort_values("calls", ascending=False).to_csv(
+        output_dir / "model_usage.csv", index=False
     )
 
     tool_usage = tool_calls.groupby(["source", "tool_name"], as_index=False).agg(
@@ -1015,8 +1005,8 @@ def main() -> None:
         failures=("call_success", lambda values: values.eq(False).sum()),
     )
     tool_usage["failure_ratio"] = safe_ratio(tool_usage["failures"], tool_usage["known_outcomes"])
-    tool_usage.sort_values(["source", "calls"], ascending=[True, False]).to_csv(
-        args.output_dir / "tool_usage.csv", index=False
+    tool_usage.sort_values("calls", ascending=False).to_csv(
+        output_dir / "tool_usage.csv", index=False
     )
 
     data_quality = pd.DataFrame(
@@ -1040,13 +1030,30 @@ def main() -> None:
             },
         ]
     )
-    data_quality.to_csv(args.output_dir / "data_quality.csv", index=False)
+    data_quality.to_csv(output_dir / "data_quality.csv", index=False)
 
-    make_plots(runs, threads, model_calls, tool_calls, response_gaps, args.output_dir)
+    make_plots(runs, threads, model_calls, tool_calls, response_gaps, output_dir)
+    return summary
 
-    with pd.option_context("display.max_columns", None, "display.width", 220):
-        print(summary.round(3).to_string(index=False))
-    print(f"\nWrote analysis to {args.output_dir.resolve()}")
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Analyze Codex and Claude coding-agent event threads.")
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=Path(__file__).parent / "sanitized" / "threads.parquet",
+        help="Input event parquet",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path(__file__).parent / "output",
+        help="Directory for CSV tables and PNG plots",
+    )
+    args = parser.parse_args()
+
+    analyze_threads(args.input, args.output_dir)
+    print(f"Wrote analysis to {args.output_dir.resolve()}")
 
 
 if __name__ == "__main__":

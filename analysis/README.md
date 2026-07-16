@@ -3,7 +3,7 @@
 Run the sanitizer:
 
 ```bash
-uv run python main.py
+uv run python gather_session_data.py
 ```
 
 Outputs:
@@ -26,7 +26,7 @@ For subagent analysis, group by `agent_id`, `parent_thread_id`, `child_thread_id
 
 ## Coding-agent thread analysis
 
-`analyze_threads.py` reads the metadata-only event parquet produced by `main.py` and writes analysis tables and plots for the full dataset plus Codex/Claude breakdowns.
+`analyze_threads.py` reads the metadata-only event parquet produced by `gather_session_data.py` and writes analysis tables and plots for the full dataset plus Codex/Claude breakdowns.
 
 Run it from the repository root:
 
@@ -86,21 +86,21 @@ Reasoning tokens are a subset of total output tokens. `reasoning_share_of_output
 
 ## Offline HTML report
 
-`generate_report.py` runs the sanitizer and analyzer together, then creates a local dashboard with the charts, headline tables, and readable transcripts:
+`main.py` runs the session-data gatherer and analyzer together, then creates a local dashboard with the charts, headline tables, model cost estimates, and data-quality checks:
 
 ```bash
-uv run --project analysis analysis/generate_report.py --open
+uv run --project analysis analysis/main.py --open
 ```
 
-The report is written to `analysis/report/index.html` by default. It has no network dependencies. Transcript links are relative HTML links, and both JSONL input and HTML output use UTF-8 explicitly, so the report can be moved and opened on Windows, macOS, or Linux.
+The report is written to `analysis/report/index.html` by default and can be opened on Windows, macOS, or Linux. During generation, the script downloads the current pricing catalog from [models.dev](https://models.dev) and caches it under `report/data/`. If the refresh fails, it uses the last cached catalog; if no catalog is available, the report still builds with costs marked unavailable.
 
 Custom inputs and output directory:
 
 ```bash
-uv run --project analysis analysis/generate_report.py \
+uv run --project analysis analysis/main.py \
   --codex-input /path/to/codex/sessions \
   --claude-input /path/to/claude/projects \
   --output-dir /path/to/report
 ```
 
-The report contains the original transcript text and tool details. Treat the whole report directory as private; the Parquet and CSV files under `data/` remain metadata-only.
+Costs use the standard API rates per million tokens for uncached input, cache reads, cache writes, output, and separately-priced reasoning when available. They are estimates and do not include subscriptions, discounts, batch pricing, or long-context pricing tiers. Internal or synthetic model IDs that do not appear in models.dev are shown as unmatched rather than assigned a guessed cost. The report remains metadata-only and does not include transcript contents.
